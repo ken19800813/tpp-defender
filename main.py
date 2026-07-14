@@ -562,6 +562,19 @@ class App(ctk.CTk):
         self.setup_ui()
         self.after(5000, self._check_ads)
 
+    def _create_context_menu(self, widget):
+        """為輸入框建立右鍵菜單"""
+        context_menu = tk.Menu(self, tearoff=0, bg="#1c2626", fg="white")
+        context_menu.add_command(label="貼上", command=self._paste_url)
+
+        def show_menu(event):
+            try:
+                context_menu.tk_popup(event.x_root, event.y_root)
+            except:
+                pass
+
+        widget.bind("<Button-3>", show_menu)  # 右鍵
+
     def _setup_menu(self):
         """加入菜單欄，提供編輯功能（主要是貼上網址）"""
         menubar = tk.Menu(self, bg="#1c2626", fg="white", relief="flat")
@@ -570,10 +583,6 @@ class App(ctk.CTk):
         edit_menu = tk.Menu(menubar, tearoff=0, bg="#1c2626", fg="white", relief="flat")
         menubar.add_cascade(label="編輯", menu=edit_menu)
         edit_menu.add_command(label="貼上網址 (Ctrl+V / Cmd+V)", command=self._paste_url)
-
-        # 全域快捷鍵綁定
-        self.bind("<Control-v>", lambda e: self._paste_url())
-        self.bind("<Command-v>", lambda e: self._paste_url())
 
     def _paste_url(self):
         """從剪貼簿貼上網址到「直播網址」輸入框"""
@@ -741,7 +750,24 @@ class App(ctk.CTk):
             row2, placeholder_text="https://www.youtube.com/watch?v=...", height=48, font=FONT_ENTRY
         )
         self.entry_url.pack(side="left", padx=(0, 10), fill="x", expand=True)
-        bind_paste(self.entry_url)
+
+        # 快捷鍵綁定：直接綁定到 Entry
+        def paste_on_entry(event=None):
+            try:
+                url = pyperclip.paste()
+                if url:
+                    self.entry_url.delete(0, "end")
+                    self.entry_url.insert(0, url)
+            except:
+                pass
+            return "break"
+
+        # 綁定 Ctrl+V (Windows/Linux) 和 Cmd+V (Mac)
+        self.entry_url.bind("<Control-v>", paste_on_entry)
+        self.entry_url.bind("<Command-v>", paste_on_entry)
+
+        # 右鍵菜單作為備選
+        self._create_context_menu(self.entry_url)
 
         self.btn_start = ctk.CTkButton(
             row2, text="啟動雷達", command=self.start_monitoring, font=FONT_BUTTON,
