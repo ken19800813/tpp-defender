@@ -1347,8 +1347,8 @@ class App(ctk.CTk):
         """共用的新增/編輯規則表單"""
         dlg = ctk.CTkToplevel(self)
         dlg.title(title)
-        dlg.geometry("620x560")
-        dlg.minsize(480, 440)
+        dlg.geometry("620x650")
+        dlg.minsize(480, 500)
         dlg.attributes("-topmost", True)
 
         priority_var = ctk.BooleanVar(value=initial_priority)
