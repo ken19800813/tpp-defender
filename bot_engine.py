@@ -236,6 +236,21 @@ class YouTubeLiveTacticalBot:
                 return path
         return None
 
+    def _get_system_chrome_profile(self):
+        """取得系統 Chrome 的真實設定檔路徑（已登入帳號）"""
+        home = str(Path.home())
+
+        if sys.platform == "darwin":
+            profile = os.path.join(home, "Library/Application Support/Google/Chrome/Default")
+        elif sys.platform == "win32":
+            profile = os.path.join(home, "AppData\\Local\\Google\\Chrome\\User Data\\Default")
+        else:  # linux
+            profile = os.path.join(home, ".config/google-chrome/Default")
+
+        if os.path.exists(profile):
+            return profile
+        return None
+
     def start_monitor(self, video_url: str):
         """啟動唯讀雷達監聽"""
         if self.check_channel_lock(video_url):
@@ -245,18 +260,27 @@ class YouTubeLiveTacticalBot:
         self.is_running = True
         try:
             with sync_playwright() as p:
-                os.makedirs(BROWSER_PROFILE_DIR, exist_ok=True)
-
-                # 優先用系統已安裝的 Chrome
+                # 優先用系統已安裝的 Chrome + 其真實設定檔（已登入）
                 chrome_path = self._find_system_chrome()
                 if chrome_path:
-                    self.ui_callback("SYSTEM", "✓ 偵測到系統 Chrome，直接使用。")
-                    context = p.chromium.launch_persistent_context(
-                        BROWSER_PROFILE_DIR,
-                        executable_path=chrome_path,
-                        headless=False,
-                        args=["--disable-blink-features=AutomationControlled"]
-                    )
+                    self.ui_callback("SYSTEM", "✓ 偵測到系統 Chrome，使用已登入帳號。")
+                    chrome_profile = self._get_system_chrome_profile()
+                    if chrome_profile:
+                        context = p.chromium.launch_persistent_context(
+                            chrome_profile,
+                            executable_path=chrome_path,
+                            headless=False
+                        )
+                        self.page = context.pages[0] if context.pages else context.new_page()
+                    else:
+                        self.ui_callback("SYSTEM", "找不到 Chrome 設定檔，改用應用程式的隔離設定檔。")
+                        os.makedirs(BROWSER_PROFILE_DIR, exist_ok=True)
+                        context = p.chromium.launch_persistent_context(
+                            BROWSER_PROFILE_DIR,
+                            executable_path=chrome_path,
+                            headless=False
+                        )
+                        self.page = context.pages[0] if context.pages else context.new_page()
                 else:
                     # 找不到 Chrome，自動下載 Chromium
                     if not self._ensure_chromium_installed(p):
@@ -264,13 +288,12 @@ class YouTubeLiveTacticalBot:
                         return
 
                     self.ui_callback("SYSTEM", "系統未安裝 Chrome，改用 Chromium。")
+                    os.makedirs(BROWSER_PROFILE_DIR, exist_ok=True)
                     context = p.chromium.launch_persistent_context(
                         BROWSER_PROFILE_DIR,
-                        headless=False,
-                        args=["--disable-blink-features=AutomationControlled"]
+                        headless=False
                     )
-
-                self.page = context.pages[0] if context.pages else context.new_page()
+                    self.page = context.pages[0] if context.pages else context.new_page()
                 video_id = video_url.split("v=")[-1].split("&")[0]
 
                 title = self._init_session_log(video_url, video_id)
