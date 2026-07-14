@@ -13,6 +13,10 @@ from playwright.sync_api import sync_playwright
 LOGS_DIR = "logs"
 BROWSER_PROFILE_DIR = "browser_profile"
 
+# 送出冷卻秒數：不管是手動點擊送出還是全自動送出模式，兩次實際送出
+# 之間至少要間隔這麼多秒，嚴禁被拿來洗版聊天室。
+SEND_COOLDOWN_SECONDS = 10
+
 # YouTube 直播聊天室輸入框的常見選擇器，隨頁面版本可能略有差異，依序嘗試
 CHAT_INPUT_SELECTORS = [
     "yt-live-chat-message-input-renderer #input",
@@ -29,17 +33,32 @@ class YouTubeLiveTacticalBot:
         self.page = None
         self.session_log = None
         self.send_queue = queue.Queue()
+        self.last_send_time = 0.0
 
     def queue_send(self, text: str):
-        """從其他執行緒(主UI執行緒)排入一則要自動送出的回覆文字。
+        """從其他執行緒(主UI執行緒)排入一則要送出的回覆文字。
         Playwright的page物件只能在建立它的執行緒(本bot的背景執行緒)操作，
         所以用queue把指令帶進start_monitor()的迴圈裡執行，而不是直接呼叫。"""
         self.send_queue.put(text)
 
+    def get_cooldown_remaining(self) -> float:
+        """回傳距離下次可以送出還要等幾秒，0表示現在就可以送。"""
+        elapsed = time.time() - self.last_send_time
+        return max(0.0, SEND_COOLDOWN_SECONDS - elapsed)
+
+    def _try_send(self, text: str) -> bool:
+        """統一送出閘門：不管是使用者手動點擊還是全自動送出模式，
+        兩次實際送出中間都必須間隔 SEND_COOLDOWN_SECONDS 秒，
+        嚴禁被拿來洗版聊天室。回傳True代表真的送出了，False代表被冷卻擋下。"""
+        if self.get_cooldown_remaining() > 0:
+            return False
+        self._send_chat_message(text)
+        self.last_send_time = time.time()
+        return True
+
     def _send_chat_message(self, text: str):
         """自動把文字打進YouTube直播聊天室輸入框並送出。
-        這一步會真的公開發言，務必只在使用者已在彈窗親眼看過文字內容、
-        主動點擊送出後才呼叫，不做任何無人審核的全自動貼文。"""
+        這一步會真的公開發言，只透過 _try_send() 呼叫，確保一定經過冷卻檢查。"""
         try:
             input_box = None
             for selector in CHAT_INPUT_SELECTORS:
@@ -215,7 +234,13 @@ class YouTubeLiveTacticalBot:
                 while self.is_running:
                     try:
                         while not self.send_queue.empty():
-                            self._send_chat_message(self.send_queue.get())
+                            queued_text = self.send_queue.get()
+                            if not self._try_send(queued_text):
+                                self.ui_callback(
+                                    "SYSTEM",
+                                    f"送出被冷卻機制擋下（{SEND_COOLDOWN_SECONDS}秒內僅能送出一次，"
+                                    f"避免洗版），已跳過：{queued_text[:30]}"
+                                )
 
                         messages = self.page.query_selector_all("yt-live-chat-text-message-renderer")
                         for msg in messages:
@@ -248,12 +273,26 @@ class YouTubeLiveTacticalBot:
                                 if random.random() < 0.20 and self.config.poison_pill_base:
                                     suggested_reply = random.choice(self.config.poison_pill_base)
 
-                                # 3. 推送 ALERT 訊號
-                                self.ui_callback("ALERT", {
-                                    "author": author,
-                                    "content": content,
-                                    "reply": suggested_reply
-                                })
+                                # 3. 全自動送出模式：偵測到側翼攻擊且已有對應回覆時，
+                                # 不彈窗、直接送出（一樣要經過冷卻閘門）
+                                if getattr(self.config, "auto_send_enabled", False):
+                                    if self._try_send(suggested_reply):
+                                        self.ui_callback("AUTO_SENT", {
+                                            "author": author,
+                                            "content": content,
+                                            "reply": suggested_reply
+                                        })
+                                    else:
+                                        self.ui_callback(
+                                            "SYSTEM",
+                                            f"全自動送出被冷卻機制擋下，跳過此則留言：{content[:30]}"
+                                        )
+                                else:
+                                    self.ui_callback("ALERT", {
+                                        "author": author,
+                                        "content": content,
+                                        "reply": suggested_reply
+                                    })
                             else:
                                 self._append_message_log(author, content, flagged=False)
                                 self.ui_callback("NORMAL", {

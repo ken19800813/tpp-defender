@@ -280,13 +280,18 @@ class Marquee(ctk.CTkFrame):
 class NotificationPopUp(ctk.CTkToplevel):
     """置頂警示小彈窗：顯示系統建議的回覆，但文字是可編輯的——使用者可以先修改
     內容再送出。送出前會即時檢查是否包含髒話/禁用詞，違規時整個擋下、無法送出。
-    點擊送出後，會自動打字進聊天室並直接送出（這一步會真的公開發言）。"""
+    每個小窗只能送出一次；送出還受全域10秒冷卻限制，倒數期間按鈕會顯示秒數、
+    無法點擊，嚴禁被拿來洗版聊天室。點擊送出後，會自動打字進聊天室並直接送出
+    （這一步會真的公開發言）。"""
     def __init__(self, parent, author, content, reply, ui_log_callback,
-                 on_send=None, forbidden_words=None):
+                 on_send=None, forbidden_words=None, cooldown_getter=None):
         super().__init__(parent)
         self.ui_log_callback = ui_log_callback
         self.on_send = on_send
         self.forbidden_words = forbidden_words or []
+        self.cooldown_getter = cooldown_getter or (lambda: 0.0)
+        self._has_sent = False
+        self._alive = True
 
         self.overrideredirect(True)
         self.attributes("-topmost", True)
@@ -319,7 +324,7 @@ class NotificationPopUp(ctk.CTkToplevel):
         )
         self.reply_box.pack(fill="x", padx=16, pady=(4, 4))
         self.reply_box.insert("1.0", reply)
-        self.reply_box.bind("<KeyRelease>", self._on_text_changed)
+        self.reply_box.bind("<KeyRelease>", self._refresh_button_state)
 
         self.warning_label = ctk.CTkLabel(
             self, text="", font=("Arial", 13, "bold"), text_color=DANGER
@@ -343,35 +348,68 @@ class NotificationPopUp(ctk.CTkToplevel):
         ).pack(side="left")
 
         self.reply_box.focus_set()
-        self._on_text_changed()
+        self._refresh_button_state()
+        self._tick_cooldown()
+
+    def destroy(self):
+        self._alive = False
+        super().destroy()
 
     def _get_text(self) -> str:
         return self.reply_box.get("1.0", "end").strip()
 
-    def _on_text_changed(self, event=None):
+    def _tick_cooldown(self):
+        """每秒刷新一次冷卻倒數顯示，冷卻結束前按鈕會一直顯示剩餘秒數"""
+        if not self._alive:
+            return
+        self._refresh_button_state()
+        self.after(1000, self._tick_cooldown)
+
+    def _refresh_button_state(self, event=None):
+        if self._has_sent:
+            return
+
         text = self._get_text()
         bad_word = find_forbidden_word(text, self.forbidden_words)
         if bad_word:
             self.warning_label.configure(text=f"⚠ 內容包含禁用詞彙「{bad_word}」，無法送出")
             self.reply_box.configure(border_color=DANGER)
-            self.btn_send.configure(state="disabled", fg_color="#555")
+            self.btn_send.configure(text="送出", state="disabled", fg_color="#555")
+            return
+
+        self.warning_label.configure(text="")
+        self.reply_box.configure(border_color="#333")
+
+        remaining = self.cooldown_getter()
+        if remaining > 0:
+            self.btn_send.configure(
+                text=f"送出（冷卻中 {int(remaining) + 1} 秒）",
+                state="disabled", fg_color="#555"
+            )
         else:
-            self.warning_label.configure(text="")
-            self.reply_box.configure(border_color="#333")
-            self.btn_send.configure(state="normal", fg_color=ACCENT)
+            self.btn_send.configure(text="送出", state="normal", fg_color=ACCENT)
 
     def on_click_send(self):
+        if self._has_sent:
+            return
         text = self._get_text()
         if not text:
             return
         if find_forbidden_word(text, self.forbidden_words):
-            return  # 按鈕理論上已被停用，這裡再擋一次防止例如Enter快捷鍵繞過
+            return  # 按鈕理論上已被停用，這裡再擋一次防止繞過
+        if self.cooldown_getter() > 0:
+            return  # 同上，冷卻中理論上按鈕已停用
+
+        # 每個小窗只能送出一次：送出瞬間立刻鎖住，不管後續結果如何都不能再按
+        self._has_sent = True
+        self.btn_send.configure(text="已送出", state="disabled", fg_color="#555")
+
         pyperclip.copy(text)
         self.ui_log_callback("SYSTEM", f"正在自動送出反擊建議：{text}")
         if self.on_send:
             self.on_send(text)
-        self.destroy()
         bring_chat_browser_to_front()
+        self.after(600, self.destroy)
 
 
 class App(ctk.CTk):
@@ -541,6 +579,26 @@ class App(ctk.CTk):
         )
         self.btn_test_alert.pack(side="left", padx=4)
 
+        row3 = ctk.CTkFrame(frame_url, fg_color="transparent")
+        row3.pack(fill="x", pady=(10, 0))
+
+        self.auto_send_var = ctk.BooleanVar(value=self.config_mgr.auto_send_enabled)
+        self.auto_send_switch = ctk.CTkSwitch(
+            row3, text="全自動送出模式", font=FONT_LABEL_BOLD,
+            variable=self.auto_send_var, command=self.on_toggle_auto_send,
+            progress_color=DANGER, button_color="#eee", button_hover_color="#fff"
+        )
+        self.auto_send_switch.pack(side="left")
+        info_icon(
+            row3,
+            "開啟後，偵測到側翼攻擊留言且系統已找到對應的反擊回覆時，\n"
+            "會直接自動送出到聊天室，不會再彈出確認小窗讓你先看過內容。\n"
+            "關閉（預設）時維持原本流程：彈窗顯示、你確認或編輯後手動按送出。\n\n"
+            "不管開關與否，送出動作都受同一個10秒冷卻機制限制，\n"
+            "不能拿來洗版聊天室。",
+            side="left", padx=(10, 0)
+        )
+
         # 日誌顯示區
         frame_log = ctk.CTkFrame(tab, fg_color="transparent")
         frame_log.pack(fill="both", expand=True, padx=8, pady=(16, 8))
@@ -576,6 +634,15 @@ class App(ctk.CTk):
         self.log_text.tag_config("ALERT", foreground="#ff4444", background="#1a0000")
         self.log_text.tag_config("SYSTEM", foreground="#8fb3b3")
         self.log_text.tag_config("NORMAL", foreground=LOG_WHITE)
+        self.log_text.tag_config("AUTO_SENT", foreground=ACCENT, background="#0a1a1a")
+
+    def on_toggle_auto_send(self):
+        enabled = bool(self.auto_send_var.get())
+        self.config_mgr.set_auto_send_enabled(enabled)
+        self.append_log_system(
+            "全自動送出模式已開啟：偵測到側翼攻擊會直接送出回覆，不再跳出確認小窗。"
+            if enabled else "全自動送出模式已關閉：偵測到側翼攻擊會跳出小窗，需手動確認才送出。"
+        )
 
     def trigger_test_alert(self):
         """手動觸發一次假的側翼攻擊留言，用來確認彈窗機制本身正常運作"""
@@ -1018,7 +1085,13 @@ class App(ctk.CTk):
             NotificationPopUp(
                 self, data['author'], data['content'], data['reply'],
                 self.handle_bot_signal, on_send=self.request_auto_send,
-                forbidden_words=self.config_mgr.forbidden_words
+                forbidden_words=self.config_mgr.forbidden_words,
+                cooldown_getter=self.bot_manager.get_cooldown_remaining
+            )
+        elif msg_type == "AUTO_SENT":
+            self.append_log(
+                f"[已自動送出] {data['author']}: {data['content']} -> {data['reply']}",
+                "AUTO_SENT"
             )
         elif msg_type == "NORMAL":
             self.append_log_normal(f"{data['author']}: {data['content']}")

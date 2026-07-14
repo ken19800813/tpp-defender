@@ -44,6 +44,7 @@ class ConfigManager:
         self.locked_channels: List[str] = []
         self.poison_pill_base: List[str] = []
         self.marquee_messages: List[str] = []
+        self.auto_send_enabled: bool = False
 
         self.fetch_remote_rules()
         self.fetch_livestream_config()
@@ -133,12 +134,13 @@ class ConfigManager:
                 pass
 
     def load(self):
-        """載入本機自訂規則（僅使用者自行新增的規則，不含雲端預設規則）"""
+        """載入本機設定（自訂規則、全自動送出開關等個人偏好，不含雲端預設規則）"""
         if os.path.exists(self.filepath):
             try:
                 with open(self.filepath, "r", encoding="utf-8") as f:
                     d = json.load(f)
                     self.user_rules = [Rule(**r) for r in d.get("rules", [])]
+                    self.auto_send_enabled = d.get("auto_send_enabled", False)
             except Exception:
                 self.user_rules = []
         else:
@@ -161,15 +163,23 @@ class ConfigManager:
         return True
 
     def save(self):
-        """存檔本機自訂規則（僅使用者新增的部分，雲端預設規則不寫入本機檔案）"""
+        """存檔本機設定（自訂規則、全自動送出開關，雲端預設規則不寫入本機檔案）"""
         os.makedirs(os.path.dirname(self.filepath) or ".", exist_ok=True)
         with open(self.filepath, "w", encoding="utf-8") as f:
             json.dump(
-                {"rules": [asdict(r) for r in self.user_rules]},
+                {
+                    "rules": [asdict(r) for r in self.user_rules],
+                    "auto_send_enabled": self.auto_send_enabled,
+                },
                 f,
                 indent=4,
                 ensure_ascii=False
             )
+
+    def set_auto_send_enabled(self, enabled: bool):
+        """開關全自動送出模式，並持久化到本機設定檔"""
+        self.auto_send_enabled = enabled
+        self.save()
 
     def add_rule(self, rule: Rule):
         """新增使用者自訂規則"""
