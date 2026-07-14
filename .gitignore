@@ -34,3 +34,4 @@ ENV/
 user_data/
 security_cache.json
 security_version.json
+logs/

@@ -31,6 +31,7 @@ class ConfigManager:
         self.filepath = filepath
         self.settings = SafetySettings()
         self.rules: List[Rule] = []
+        self.user_rules: List[Rule] = []
         self.forbidden_words: List[str] = []
         self.default_rules_data: List[dict] = []
         self.locked_channels: List[str] = []
@@ -38,6 +39,7 @@ class ConfigManager:
 
         self.fetch_remote_rules()
         self.load()
+        self._rebuild_rules()
 
     def fetch_remote_rules(self):
         """智慧 ETag 版控：有更動才下載，否則使用本機快取秒開"""
@@ -93,18 +95,21 @@ class ConfigManager:
                 pass
 
     def load(self):
-        """載入本機自訂規則設定"""
+        """載入本機自訂規則（僅使用者自行新增的規則，不含雲端預設規則）"""
         if os.path.exists(self.filepath):
             try:
                 with open(self.filepath, "r", encoding="utf-8") as f:
                     d = json.load(f)
-                    self.rules = [Rule(**r) for r in d.get("rules", [])]
+                    self.user_rules = [Rule(**r) for r in d.get("rules", [])]
             except Exception:
-                self.rules = [Rule(**r) for r in self.default_rules_data]
-                self.save()
+                self.user_rules = []
         else:
-            self.rules = [Rule(**r) for r in self.default_rules_data]
-            self.save()
+            self.user_rules = []
+
+    def _rebuild_rules(self):
+        """合併雲端預設規則與使用者自訂規則，雲端規則更新時會自動反映在這裡"""
+        cloud_rules = [Rule(**r) for r in self.default_rules_data]
+        self.rules = cloud_rules + self.user_rules
 
     def validate_custom_rule(self, user_keywords: List[str], user_replies: List[str]) -> bool:
         """雙向審查：若輸入內容包含中央禁用詞，則攔截拒絕儲存"""
@@ -118,27 +123,30 @@ class ConfigManager:
         return True
 
     def save(self):
-        """存檔本機規則設定"""
+        """存檔本機自訂規則（僅使用者新增的部分，雲端預設規則不寫入本機檔案）"""
         os.makedirs(os.path.dirname(self.filepath) or ".", exist_ok=True)
         with open(self.filepath, "w", encoding="utf-8") as f:
             json.dump(
-                {"rules": [asdict(r) for r in self.rules]},
+                {"rules": [asdict(r) for r in self.user_rules]},
                 f,
                 indent=4,
                 ensure_ascii=False
             )
 
     def add_rule(self, rule: Rule):
-        """新增規則"""
-        self.rules.append(rule)
+        """新增使用者自訂規則"""
+        self.user_rules.append(rule)
+        self._rebuild_rules()
         self.save()
 
     def delete_rule(self, rule_id: str):
-        """刪除規則"""
-        self.rules = [r for r in self.rules if r.id != rule_id]
+        """刪除使用者自訂規則（雲端預設規則無法在此刪除）"""
+        self.user_rules = [r for r in self.user_rules if r.id != rule_id]
+        self._rebuild_rules()
         self.save()
 
     def update_rule(self, rule_id: str, updated_rule: Rule):
-        """更新規則"""
-        self.rules = [updated_rule if r.id == rule_id else r for r in self.rules]
+        """更新使用者自訂規則"""
+        self.user_rules = [updated_rule if r.id == rule_id else r for r in self.user_rules]
+        self._rebuild_rules()
         self.save()

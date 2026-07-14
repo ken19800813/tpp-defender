@@ -1,7 +1,13 @@
 import time
 import random
+import json
+import os
+import re
 import requests
+from datetime import datetime
 from playwright.sync_api import sync_playwright
+
+LOGS_DIR = "logs"
 
 
 class YouTubeLiveTacticalBot:
@@ -10,6 +16,7 @@ class YouTubeLiveTacticalBot:
         self.ui_callback = ui_callback
         self.is_running = False
         self.page = None
+        self.session_log = None
 
     def check_channel_lock(self, video_url: str) -> bool:
         """透過 YouTube 公開 OEmbed API 檢查該直播頻道是否屬於硬性鎖定黑名單
@@ -42,6 +49,59 @@ class YouTubeLiveTacticalBot:
             pass
         return False
 
+    def _fetch_video_title(self, video_id: str) -> str:
+        """取得直播節目名稱，供歷史記錄存檔使用"""
+        try:
+            oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+            res = requests.get(oembed_url, timeout=4)
+            if res.status_code == 200:
+                return res.json().get("title", "未命名直播")
+        except Exception:
+            pass
+        return "未命名直播"
+
+    def _init_session_log(self, video_url: str, video_id: str) -> str:
+        """建立本場直播的聊天記錄容器"""
+        title = self._fetch_video_title(video_id)
+        self.session_log = {
+            "title": title,
+            "video_url": video_url,
+            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "messages": []
+        }
+        return title
+
+    def _append_message_log(self, author: str, content: str, flagged: bool):
+        """記錄單則留言（無論是否被判定為側翼攻擊）"""
+        if self.session_log is not None:
+            self.session_log["messages"].append({
+                "author": author,
+                "content": content,
+                "flagged": flagged,
+                "time": datetime.now().strftime("%H:%M:%S")
+            })
+
+    def _save_session_log(self):
+        """直播結束後將完整聊天記錄存檔到 logs/ 目錄"""
+        if not self.session_log or not self.session_log["messages"]:
+            return
+        os.makedirs(LOGS_DIR, exist_ok=True)
+        safe_title = re.sub(r'[\\/:*?"<>|]', "_", self.session_log["title"]).strip()[:60] or "未命名直播"
+        date_str = self.session_log["started_at"].split(" ")[0]
+        filename = f"{date_str}_{safe_title}_{int(time.time())}.json"
+        path = os.path.join(LOGS_DIR, filename)
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.session_log, f, ensure_ascii=False, indent=2)
+            flagged_count = sum(1 for m in self.session_log["messages"] if m["flagged"])
+            self.ui_callback(
+                "SYSTEM",
+                f"📁 本場直播記錄已存檔（共 {len(self.session_log['messages'])} 則留言，"
+                f"{flagged_count} 則側翼標記）：{filename}"
+            )
+        except Exception as e:
+            self.ui_callback("SYSTEM", f"⚠️ 記錄存檔失敗：{str(e)}")
+
     def start_monitor(self, video_url: str):
         """啟動唯讀雷達監聽"""
         if self.check_channel_lock(video_url):
@@ -56,7 +116,8 @@ class YouTubeLiveTacticalBot:
                 self.page = context.new_page()
                 video_id = video_url.split("v=")[-1].split("&")[0]
 
-                self.ui_callback("SYSTEM", "系統：正在部署唯讀防禦雷達...")
+                title = self._init_session_log(video_url, video_id)
+                self.ui_callback("SYSTEM", f"系統：正在部署唯讀防禦雷達... 節目：{title}")
                 self.page.goto(f"https://www.youtube.com/live_chat?v={video_id}")
 
                 try:
@@ -93,10 +154,12 @@ class YouTubeLiveTacticalBot:
                                     break
 
                             if matched_rule:
+                                self._append_message_log(author, content, flagged=True)
+
                                 # 1. 挑選澄清草稿
                                 suggested_reply = random.choice(matched_rule.reply_pool)
 
-                                # 2. 20% 透明毒丸機制
+                                # 2. 20% 透明反擊建議覆蓋機制
                                 if random.random() < 0.20 and self.config.poison_pill_base:
                                     suggested_reply = random.choice(self.config.poison_pill_base)
 
@@ -107,6 +170,7 @@ class YouTubeLiveTacticalBot:
                                     "reply": suggested_reply
                                 })
                             else:
+                                self._append_message_log(author, content, flagged=False)
                                 self.ui_callback("NORMAL", {
                                     "author": author,
                                     "content": content
@@ -117,6 +181,8 @@ class YouTubeLiveTacticalBot:
                 context.close()
         except Exception as e:
             self.ui_callback("SYSTEM", f"錯誤：{str(e)}")
+        finally:
+            self._save_session_log()
 
     def stop(self):
         """停止監聽"""
