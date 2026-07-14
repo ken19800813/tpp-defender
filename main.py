@@ -1,5 +1,6 @@
 import customtkinter as ctk
-from tkinter import messagebox, scrolledtext
+import tkinter as tk
+from tkinter import messagebox, scrolledtext, ttk
 import pyperclip
 import uuid
 import os
@@ -71,41 +72,51 @@ def info_icon(parent, text, **pack_kwargs):
 
 
 class Marquee(ctk.CTkFrame):
-    """底部跑馬燈：內容來源可由雲端 GitHub 同步的 marquee_messages 更新"""
+    """底部跑馬燈：文字從視窗最右側進場，往左捲動，內容由雲端 GitHub 同步的 marquee_messages 更新"""
     def __init__(self, parent, get_messages, **kwargs):
         super().__init__(parent, **kwargs)
         self.get_messages = get_messages
-        self._full_text = ""
-        self._pos = 0
         self._running = True
+        self._source_text = None
+        self._text_id = None
+        self._x = None
 
-        self.label = ctk.CTkLabel(self, text="", font=FONT_MARQUEE, text_color=ACCENT, anchor="w")
-        self.label.pack(fill="x", padx=16, pady=8)
+        self.canvas = tk.Canvas(self, height=44, bg=BG_PANEL, highlightthickness=0)
+        self.canvas.pack(fill="x", padx=16, pady=8)
 
         self._tick()
 
     def _tick(self):
         if not self._running:
             return
+
         messages = self.get_messages() or []
-        joined = "　★　".join(messages) if messages else "（尚無跑馬燈訊息）"
-        full = joined + "　★　"
+        text = ("　★　".join(messages) if messages else "（尚無跑馬燈訊息）") + "　★　"
 
-        if full != self._full_text:
-            self._full_text = full
-            self._pos = 0
+        canvas_width = self.canvas.winfo_width()
+        if canvas_width <= 1:
+            # 視窗尚未完成排版，稍後再試
+            self.after(50, self._tick)
+            return
 
-        window_len = 70
-        source = self._full_text
-        if len(source) < window_len:
-            source = source * (window_len // max(len(source), 1) + 2)
+        if text != self._source_text or self._text_id is None:
+            self._source_text = text
+            self.canvas.delete("all")
+            self._text_id = self.canvas.create_text(
+                canvas_width, 22, text=text, anchor="w",
+                fill=ACCENT, font=FONT_MARQUEE
+            )
+            self._x = canvas_width
 
-        doubled = source + source
-        text = doubled[self._pos:self._pos + window_len]
-        self.label.configure(text=text)
-        self._pos = (self._pos + 1) % len(source)
+        bbox = self.canvas.bbox(self._text_id)
+        text_width = (bbox[2] - bbox[0]) if bbox else 200
 
-        self.after(160, self._tick)
+        self._x -= 4
+        if self._x < -text_width:
+            self._x = canvas_width
+
+        self.canvas.coords(self._text_id, self._x, 22)
+        self.after(30, self._tick)
 
     def destroy(self):
         self._running = False
@@ -338,16 +349,55 @@ class App(ctk.CTk):
         frame_list = ctk.CTkFrame(tab, fg_color="transparent")
         frame_list.pack(fill="both", expand=True, padx=8, pady=(10, 8))
 
-        ctk.CTkLabel(frame_list, text="已建立規則", font=FONT_LABEL_BOLD).pack(anchor="w", pady=(0, 8))
-
-        self.rules_text = scrolledtext.ScrolledText(
-            frame_list, height=15, bg="#0a0f0f", fg=LOG_WHITE, font=FONT_MONO,
-            borderwidth=0, spacing1=6, spacing3=6
+        list_header = ctk.CTkFrame(frame_list, fg_color="transparent")
+        list_header.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(list_header, text="已建立規則", font=FONT_LABEL_BOLD).pack(side="left")
+        info_icon(
+            list_header,
+            "雙擊任一列可查看該規則完整的關鍵字與反擊內容\n"
+            "（表格內容太長時會被截斷顯示）。",
+            side="left", padx=(10, 0)
         )
-        self.rules_text.pack(fill="both", expand=True)
-        self.rules_text.config(state="disabled")
-        self.rules_text.tag_config("CLOUD", foreground="#8fb3b3")
-        self.rules_text.tag_config("USER", foreground=ACCENT)
+
+        style = ttk.Style()
+        style.theme_use("default")
+        style.configure(
+            "Rules.Treeview",
+            background="#0a0f0f", fieldbackground="#0a0f0f", foreground=LOG_WHITE,
+            rowheight=34, font=("Arial", 14), borderwidth=0
+        )
+        style.configure(
+            "Rules.Treeview.Heading",
+            background=BG_PANEL, foreground=ACCENT, font=("Arial", 15, "bold"), borderwidth=0
+        )
+        style.map("Rules.Treeview", background=[("selected", ACCENT_DIM)])
+
+        tree_frame = ctk.CTkFrame(frame_list, fg_color="transparent")
+        tree_frame.pack(fill="both", expand=True)
+
+        self.rules_tree = ttk.Treeview(
+            tree_frame, columns=("no", "keywords", "replies", "source"), show="headings",
+            style="Rules.Treeview"
+        )
+        self.rules_tree.heading("no", text="編號")
+        self.rules_tree.heading("keywords", text="偵測關鍵字")
+        self.rules_tree.heading("replies", text="反擊內容")
+        self.rules_tree.heading("source", text="來源")
+        self.rules_tree.column("no", width=60, anchor="center")
+        self.rules_tree.column("keywords", width=420, anchor="w")
+        self.rules_tree.column("replies", width=420, anchor="w")
+        self.rules_tree.column("source", width=90, anchor="center")
+
+        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.rules_tree.yview)
+        self.rules_tree.configure(yscrollcommand=scrollbar.set)
+        self.rules_tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        self.rules_tree.tag_configure("cloud", foreground="#8fb3b3")
+        self.rules_tree.tag_configure("user", foreground=ACCENT)
+
+        self._rules_by_iid = {}
+        self.rules_tree.bind("<Double-1>", self._on_rule_row_double_click)
 
         self.refresh_rules_display()
 
@@ -484,11 +534,30 @@ class App(ctk.CTk):
                 font=FONT_LABEL, text_color="#8fb3b3", anchor="w"
             ).pack(anchor="w")
 
+            btn_box = ctk.CTkFrame(row, fg_color="transparent")
+            btn_box.pack(side="right", padx=14, pady=12)
+
             ctk.CTkButton(
-                row, text="查看完整記錄", width=150, height=44, font=FONT_BUTTON,
+                btn_box, text="刪除", width=90, height=44, font=FONT_BUTTON,
+                fg_color=DANGER, hover_color="#cc3333",
+                command=lambda p=path, t=title: self.delete_history_record(p, t)
+            ).pack(side="right", padx=(8, 0))
+
+            ctk.CTkButton(
+                btn_box, text="查看完整記錄", width=150, height=44, font=FONT_BUTTON,
                 fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a",
                 command=lambda p=path: self.open_history_viewer(p)
-            ).pack(side="right", padx=14, pady=12)
+            ).pack(side="right")
+
+    def delete_history_record(self, path, title):
+        if not messagebox.askyesno("確認刪除", f"確定要刪除這場記錄嗎？\n\n{title}\n\n此動作無法復原。"):
+            return
+        try:
+            os.remove(path)
+        except Exception as e:
+            messagebox.showerror("錯誤", f"刪除失敗：{e}")
+            return
+        self.refresh_history_list()
 
     def open_history_viewer(self, path):
         """開啟單場直播的完整聊天記錄檢視窗"""
@@ -501,7 +570,7 @@ class App(ctk.CTk):
 
         win = ctk.CTkToplevel(self)
         win.title(data.get("title", "直播記錄"))
-        win.geometry("880x680")
+        win.geometry("900x720")
         win.attributes("-topmost", True)
 
         ctk.CTkLabel(
@@ -511,7 +580,15 @@ class App(ctk.CTk):
         ctk.CTkLabel(
             win, text=f"開始時間：{data.get('started_at', '未知')}　網址：{data.get('video_url', '')}",
             font=FONT_LABEL, text_color="#8fb3b3"
-        ).pack(anchor="w", padx=18, pady=(4, 12))
+        ).pack(anchor="w", padx=18, pady=(4, 10))
+
+        search_row = ctk.CTkFrame(win, fg_color="transparent")
+        search_row.pack(fill="x", padx=18, pady=(0, 10))
+
+        search_entry = ctk.CTkEntry(search_row, height=42, font=FONT_ENTRY, placeholder_text="搜尋留言內容或留言者...")
+        search_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        search_state = {"matches": [], "current": -1}
 
         viewer = scrolledtext.ScrolledText(
             win, bg="#0a0f0f", fg=LOG_WHITE, font=FONT_MONO, borderwidth=0, spacing1=4, spacing3=4
@@ -519,12 +596,67 @@ class App(ctk.CTk):
         viewer.pack(fill="both", expand=True, padx=18, pady=(0, 16))
         viewer.tag_config("FLAGGED", foreground="#ff4444")
         viewer.tag_config("NORMAL", foreground=LOG_WHITE)
+        viewer.tag_config("SEARCH_HIT", background="#ffe066", foreground="#0a0a0a")
 
         for msg in data.get("messages", []):
             line = f"[{msg.get('time', '')}] {msg.get('author', '')}: {msg.get('content', '')}\n"
             viewer.insert("end", line, "FLAGGED" if msg.get("flagged") else "NORMAL")
 
         viewer.config(state="disabled")
+
+        result_label = ctk.CTkLabel(search_row, text="", font=FONT_LABEL, text_color="#8fb3b3")
+        result_label.pack(side="left", padx=8)
+
+        def run_search(event=None):
+            query = search_entry.get().strip()
+            viewer.tag_remove("SEARCH_HIT", "1.0", "end")
+            search_state["matches"] = []
+            search_state["current"] = -1
+
+            if not query:
+                result_label.configure(text="")
+                return
+
+            content = viewer.get("1.0", "end")
+            start = 0
+            while True:
+                idx = content.find(query, start)
+                if idx == -1:
+                    break
+                line_no = content.count("\n", 0, idx) + 1
+                line_start = content.rfind("\n", 0, idx) + 1
+                col = idx - line_start
+                tk_start = f"{line_no}.{col}"
+                tk_end = f"{line_no}.{col + len(query)}"
+                viewer.tag_add("SEARCH_HIT", tk_start, tk_end)
+                search_state["matches"].append(tk_start)
+                start = idx + len(query)
+
+            if search_state["matches"]:
+                search_state["current"] = 0
+                viewer.see(search_state["matches"][0])
+                result_label.configure(text=f"共 {len(search_state['matches'])} 筆符合，第 1 筆")
+            else:
+                result_label.configure(text="找不到符合的內容")
+
+        def jump_next(event=None):
+            if not search_state["matches"]:
+                return
+            search_state["current"] = (search_state["current"] + 1) % len(search_state["matches"])
+            idx = search_state["current"]
+            viewer.see(search_state["matches"][idx])
+            result_label.configure(text=f"共 {len(search_state['matches'])} 筆符合，第 {idx + 1} 筆")
+
+        search_entry.bind("<Return>", lambda e: (run_search() if not search_state["matches"] else jump_next()))
+
+        ctk.CTkButton(
+            search_row, text="搜尋", command=run_search, font=FONT_BUTTON,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a", height=42, width=100
+        ).pack(side="left", padx=4)
+        ctk.CTkButton(
+            search_row, text="下一筆", command=jump_next, font=FONT_BUTTON,
+            fg_color="#444", hover_color="#555", height=42, width=100
+        ).pack(side="left", padx=4)
 
     # ------------------------------------------------------------------
     # 監控控制
@@ -712,19 +844,47 @@ class App(ctk.CTk):
             ).pack(side="right", padx=12, pady=8)
 
     def refresh_rules_display(self):
-        self.rules_text.config(state="normal")
-        self.rules_text.delete("1.0", "end")
+        self.rules_tree.delete(*self.rules_tree.get_children())
+        self._rules_by_iid = {}
         user_rule_ids = {r.id for r in self.config_mgr.user_rules}
-        for rule in self.config_mgr.rules:
+
+        def truncate(text, limit=60):
+            return text if len(text) <= limit else text[:limit] + "..."
+
+        for idx, rule in enumerate(self.config_mgr.rules, start=1):
             is_user = rule.id in user_rule_ids
-            tag = "USER" if is_user else "CLOUD"
-            label = "自訂" if is_user else "雲端"
-            keywords_str = ", ".join(rule.trigger_keywords[:12])
-            if len(rule.trigger_keywords) > 12:
-                keywords_str += f" ...等共{len(rule.trigger_keywords)}個"
-            replies_str = " | ".join(rule.reply_pool[:2])
-            self.rules_text.insert("end", f"[{label}] {keywords_str}\n   -> {replies_str}...\n\n", tag)
-        self.rules_text.config(state="disabled")
+            keywords_str = truncate(", ".join(rule.trigger_keywords))
+            replies_str = truncate(" / ".join(rule.reply_pool))
+            source_label = "自訂" if is_user else "雲端"
+            iid = self.rules_tree.insert(
+                "", "end",
+                values=(idx, keywords_str, replies_str, source_label),
+                tags=("user" if is_user else "cloud",)
+            )
+            self._rules_by_iid[iid] = rule
+
+    def _on_rule_row_double_click(self, event):
+        iid = self.rules_tree.identify_row(event.y)
+        rule = self._rules_by_iid.get(iid)
+        if not rule:
+            return
+
+        win = ctk.CTkToplevel(self)
+        win.title("規則詳細內容")
+        win.geometry("620x520")
+        win.attributes("-topmost", True)
+
+        ctk.CTkLabel(win, text="偵測關鍵字", font=FONT_LABEL_BOLD, text_color=ACCENT).pack(anchor="w", padx=16, pady=(16, 4))
+        kw_box = scrolledtext.ScrolledText(win, height=6, font=FONT_MONO_SMALL, bg="#0a0f0f", fg=LOG_WHITE, borderwidth=0)
+        kw_box.pack(fill="x", padx=16)
+        kw_box.insert("1.0", "、".join(rule.trigger_keywords))
+        kw_box.config(state="disabled")
+
+        ctk.CTkLabel(win, text="反擊內容", font=FONT_LABEL_BOLD, text_color=ACCENT).pack(anchor="w", padx=16, pady=(14, 4))
+        rp_box = scrolledtext.ScrolledText(win, height=10, font=FONT_MONO_SMALL, bg="#0a0f0f", fg=LOG_WHITE, borderwidth=0)
+        rp_box.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        rp_box.insert("1.0", "\n".join(rule.reply_pool))
+        rp_box.config(state="disabled")
 
     def save_poison_pills(self):
         pills = [p.strip() for p in self.poison_pill_text.get("1.0", "end").split("\n") if p.strip()]
