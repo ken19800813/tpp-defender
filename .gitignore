@@ -36,3 +36,4 @@ security_cache.json
 security_version.json
 logs/
 browser_profile/
+migration_data/
