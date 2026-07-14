@@ -1378,15 +1378,17 @@ class App(ctk.CTk):
         bind_paste(entry_keywords)
 
         def update_keywords_state():
-            """最優先規則時，關鍵字欄變只讀+提示；否則用初始值"""
+            """最優先規則時，關鍵字欄變只讀+提示；否則用初始值。
+            CTkEntry 在 disabled 狀態下 delete/insert 會被底層 tk Entry 拒絕、
+            靜默失敗，所以必須先切回 normal 改完內容，最後才 disable。"""
+            entry_keywords.configure(state="normal")
+            entry_keywords.delete(0, "end")
             if priority_var.get():
-                entry_keywords.configure(state="disabled", text_color="#999999")
-                entry_keywords.delete(0, "end")
                 entry_keywords.insert(0, "不管什麼垃圾字，所有攻擊都用此訊息回覆")
+                entry_keywords.configure(state="disabled", text_color="#999999")
             else:
-                entry_keywords.configure(state="normal", text_color="#e8fdfd")
-                entry_keywords.delete(0, "end")
                 entry_keywords.insert(0, initial_keywords)
+                entry_keywords.configure(text_color="#e8fdfd")
 
         # 初始化關鍵字欄狀態（根據優先規則是否勾選）
         update_keywords_state()
@@ -1394,9 +1396,12 @@ class App(ctk.CTk):
         # 綁定 checkbox change 事件
         priority_checkbox.configure(command=update_keywords_state)
 
-        # === 回覆草稿 ===
-        ctk.CTkLabel(dlg, text="回覆草稿 (每行一句):", font=FONT_LABEL).pack(anchor="w", padx=14, pady=(10, 6))
-        text_replies = scrolledtext.ScrolledText(dlg, height=8, font=FONT_MONO)
+        # === 反擊回應文 ===
+        ctk.CTkLabel(dlg, text="反擊回應文 (每行一句):", font=FONT_LABEL).pack(anchor="w", padx=14, pady=(10, 6))
+        text_replies = scrolledtext.ScrolledText(
+            dlg, height=8, font=FONT_MONO, bg="#0a0f0f", fg=LOG_WHITE,
+            insertbackground=LOG_WHITE, borderwidth=0
+        )
         text_replies.pack(padx=14, pady=4, fill="both", expand=True)
         text_replies.insert("1.0", initial_replies)
         style_scrollbar(text_replies)
