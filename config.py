@@ -36,6 +36,7 @@ class ConfigManager:
         self.default_rules_data: List[dict] = []
         self.locked_channels: List[str] = []
         self.poison_pill_base: List[str] = []
+        self.marquee_messages: List[str] = []
 
         self.fetch_remote_rules()
         self.load()
@@ -64,6 +65,7 @@ class ConfigManager:
                 self.default_rules_data = data.get("default_defense_rules", [])
                 self.locked_channels = data.get("locked_channels", [])
                 self.poison_pill_base = data.get("poison_pill_replies", [])
+                self.marquee_messages = data.get("marquee_messages", [])
 
                 with open(CACHE_FILE, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=4)
@@ -91,6 +93,7 @@ class ConfigManager:
                     self.default_rules_data = data.get("default_defense_rules", [])
                     self.locked_channels = data.get("locked_channels", [])
                     self.poison_pill_base = data.get("poison_pill_replies", [])
+                    self.marquee_messages = data.get("marquee_messages", [])
             except Exception:
                 pass
 

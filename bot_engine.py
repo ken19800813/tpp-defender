@@ -8,6 +8,7 @@ from datetime import datetime
 from playwright.sync_api import sync_playwright
 
 LOGS_DIR = "logs"
+BROWSER_PROFILE_DIR = "browser_profile"
 
 
 class YouTubeLiveTacticalBot:
@@ -96,28 +97,37 @@ class YouTubeLiveTacticalBot:
             flagged_count = sum(1 for m in self.session_log["messages"] if m["flagged"])
             self.ui_callback(
                 "SYSTEM",
-                f"📁 本場直播記錄已存檔（共 {len(self.session_log['messages'])} 則留言，"
+                f"本場直播記錄已存檔（共 {len(self.session_log['messages'])} 則留言，"
                 f"{flagged_count} 則側翼標記）：{filename}"
             )
         except Exception as e:
-            self.ui_callback("SYSTEM", f"⚠️ 記錄存檔失敗：{str(e)}")
+            self.ui_callback("SYSTEM", f"記錄存檔失敗：{str(e)}")
 
     def start_monitor(self, video_url: str):
         """啟動唯讀雷達監聽"""
         if self.check_channel_lock(video_url):
-            self.ui_callback("SYSTEM", "❌ 安全機制判定：本工具不支援此非授權親綠陣營頻道運作！")
+            self.ui_callback("SYSTEM", "安全機制判定：本工具不支援此非授權親綠陣營頻道運作！")
             return
 
         self.is_running = True
         try:
             with sync_playwright() as p:
-                # 標準透明啟動，不使用任何對抗性參數
-                context = p.chromium.launch(headless=False)
-                self.page = context.new_page()
+                # 使用固定的使用者資料夾（persistent context），登入狀態會跨次啟動保存，
+                # 不需要每次重新登入 YouTube 帳號
+                os.makedirs(BROWSER_PROFILE_DIR, exist_ok=True)
+                context = p.chromium.launch_persistent_context(
+                    BROWSER_PROFILE_DIR, headless=False
+                )
+                self.page = context.pages[0] if context.pages else context.new_page()
                 video_id = video_url.split("v=")[-1].split("&")[0]
 
                 title = self._init_session_log(video_url, video_id)
                 self.ui_callback("SYSTEM", f"系統：正在部署唯讀防禦雷達... 節目：{title}")
+                self.ui_callback(
+                    "SYSTEM",
+                    "提示：若聊天室要求登入才能發言，請在這個瀏覽器視窗手動登入一次，"
+                    "之後啟動都會記住登入狀態。"
+                )
                 self.page.goto(f"https://www.youtube.com/live_chat?v={video_id}")
 
                 try:
@@ -127,7 +137,7 @@ class YouTubeLiveTacticalBot:
                     context.close()
                     return
 
-                self.ui_callback("SYSTEM", "🟢 雷達運作中... 靜態過濾已就緒。")
+                self.ui_callback("SYSTEM", "雷達運作中... 靜態過濾已就緒。")
                 processed_msg_ids = set()
 
                 while self.is_running:
