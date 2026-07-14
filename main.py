@@ -1344,39 +1344,65 @@ class App(ctk.CTk):
         dlg.minsize(480, 440)
         dlg.attributes("-topmost", True)
 
-        ctk.CTkLabel(dlg, text="關鍵字 (用逗號分隔):", font=FONT_LABEL).pack(anchor="w", padx=14, pady=(14, 6))
+        priority_var = ctk.BooleanVar(value=initial_priority)
+
+        # === 關鍵字欄位 ===
+        label_keywords = ctk.CTkLabel(dlg, text="關鍵字 (用逗號分隔):", font=FONT_LABEL)
+        label_keywords.pack(anchor="w", padx=14, pady=(14, 6))
+
         entry_keywords = ctk.CTkEntry(dlg, height=42, font=FONT_ENTRY, placeholder_text="例: 檳榔,哭文哲")
         entry_keywords.pack(padx=14, pady=4, fill="x")
         bind_paste(entry_keywords)
         entry_keywords.insert(0, initial_keywords)
 
+        def update_keywords_state():
+            """最優先規則時，關鍵字欄變只讀+提示"""
+            if priority_var.get():
+                entry_keywords.configure(state="disabled", text_color="#999999")
+                entry_keywords.delete(0, "end")
+                entry_keywords.insert(0, "不管什麼垃圾字，所有攻擊都用此訊息回覆")
+            else:
+                entry_keywords.configure(state="normal", text_color=TEXT_COLOR)
+                entry_keywords.delete(0, "end")
+                entry_keywords.insert(0, initial_keywords)
+
+        # === 回覆草稿 ===
         ctk.CTkLabel(dlg, text="回覆草稿 (每行一句):", font=FONT_LABEL).pack(anchor="w", padx=14, pady=(10, 6))
         text_replies = scrolledtext.ScrolledText(dlg, height=8, font=FONT_MONO)
         text_replies.pack(padx=14, pady=4, fill="both", expand=True)
         text_replies.insert("1.0", initial_replies)
         style_scrollbar(text_replies)
 
-        priority_var = ctk.BooleanVar(value=initial_priority)
+        # === 最優先規則勾選框 ===
         priority_row = ctk.CTkFrame(dlg, fg_color="transparent")
         priority_row.pack(fill="x", padx=14, pady=(8, 0))
-        ctk.CTkCheckBox(
+        priority_checkbox = ctk.CTkCheckBox(
             priority_row, text="設為最優先規則", font=FONT_LABEL, variable=priority_var,
-            fg_color=ACCENT, hover_color=ACCENT_HOVER
-        ).pack(side="left")
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, command=update_keywords_state
+        )
+        priority_checkbox.pack(side="left")
         info_icon(
             priority_row,
-            "命中任何一條規則的關鍵字後（不管是哪一條），回覆內容都會\n"
-            "改用這條「最優先規則」的內容，等於是全站統一回覆語句。\n"
-            "如果同時有多條規則被設為最優先，系統只會採用其中一條。",
+            "勾選後：只要偵測到任何側翼攻擊，系統會直接用此訊息回覆\n"
+            "（不管命中的是哪條關鍵字規則）。\n"
+            "未勾選：需自訂觸發關鍵字。",
             side="left", padx=(8, 0)
         )
 
+        # 初始化狀態
+        update_keywords_state()
+
         def do_save():
-            keywords = [k.strip() for k in entry_keywords.get().split(",") if k.strip()]
+            # 若是最優先規則，直接用虛擬關鍵字（系統內部不會看）
+            if priority_var.get():
+                keywords = ["__priority_rule__"]  # 系統標記，不實際用來匹配
+            else:
+                keywords = [k.strip() for k in entry_keywords.get().split(",") if k.strip()]
+
             replies = [r.strip() for r in text_replies.get("1.0", "end").split("\n") if r.strip()]
 
             if not keywords or not replies:
-                messagebox.showerror("錯誤", "關鍵字和回覆都不能為空")
+                messagebox.showerror("錯誤", "回覆內容不能為空")
                 return
 
             if not self.config_mgr.validate_custom_rule(keywords, replies):
