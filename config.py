@@ -43,8 +43,11 @@ class ConfigManager:
         self._rebuild_rules()
 
     def fetch_remote_rules(self):
-        """智慧 ETag 版控：有更動才下載，否則使用本機快取秒開"""
-        headers = {}
+        """智慧 ETag 版控：有更動才下載，否則使用本機快取秒開
+        關閉 gzip 協商是為了避開 raw.githubusercontent.com 的 CDN 對
+        gzip 壓縮版本的快取變體，該變體在剛 push 後常有數分鐘的延遲，
+        會導致抓到比 curl 看到的還舊的內容。檔案本身很小，不壓縮也無影響。"""
+        headers = {"Accept-Encoding": "identity"}
         if os.path.exists(VERSION_INFO_FILE):
             try:
                 with open(VERSION_INFO_FILE, "r", encoding="utf-8") as f:
