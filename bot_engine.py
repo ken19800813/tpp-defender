@@ -242,18 +242,6 @@ class YouTubeLiveTacticalBot:
             self.ui_callback("SYSTEM", "請手動前往 https://www.google.com/chrome 下載安裝 Chrome 後重試。")
             return False
 
-    def _chrome_user_data_dir(self):
-        """回傳使用者『真實 Chrome』的 User Data 目錄（裡面含已登入的 Default
-        設定檔）。這是 --user-data-dir 要指向的目錄，不是 Default 本身。"""
-        home = str(Path.home())
-        if sys.platform == "darwin":
-            path = os.path.join(home, "Library/Application Support/Google/Chrome")
-        elif sys.platform == "win32":
-            path = os.path.join(home, "AppData", "Local", "Google", "Chrome", "User Data")
-        else:  # linux
-            path = os.path.join(home, ".config/google-chrome")
-        return path if os.path.exists(path) else None
-
     def _cdp_endpoint_ready(self, port) -> bool:
         """檢查除錯埠是否已就緒（能回應 /json/version）。"""
         try:
@@ -262,33 +250,21 @@ class YouTubeLiveTacticalBot:
         except Exception:
             return False
 
-    def _kill_running_chrome(self):
-        """關閉使用者現有的 Chrome 進程。必須先關掉，否則帶除錯埠的新進程
-        只會通知既有進程開視窗、除錯埠不會真的打開（設定檔鎖定問題）。
-        Chrome 重開後會還原分頁，屬可回復操作。"""
-        try:
-            if sys.platform == "darwin":
-                subprocess.run(["pkill", "-i", "-f", "Google Chrome"], capture_output=True)
-            elif sys.platform == "win32":
-                subprocess.run(["taskkill", "/F", "/IM", "chrome.exe"], capture_output=True)
-            else:
-                subprocess.run(["pkill", "-i", "-f", "chrome"], capture_output=True)
-        except Exception:
-            pass
-
     def _launch_chrome_with_cdp(self, chrome_path, port) -> bool:
-        """用使用者的真實設定檔重新開一個帶除錯埠的 Chrome，供 Playwright 接管。
-        關鍵：--remote-allow-origins=* 是 Chrome 111+ 允許 CDP websocket 連線
-        的必要旗標，缺了會 403 連不上。不加任何自動化旗標，所以沒有橫幅、
-        Google 也不會拒絕（登入是你自己在真實設定檔完成的）。"""
-        user_data = self._chrome_user_data_dir()
-        if not user_data:
-            self.ui_callback("SYSTEM", "找不到 Chrome 設定檔目錄。")
-            return False
+        """開一個『獨立設定檔』的真 Chrome 視窗（帶除錯埠）供 Playwright 接管。
 
-        self.ui_callback("SYSTEM", "正在關閉現有 Chrome 並以你的登入設定檔重新開啟（分頁會自動還原）...")
-        self._kill_running_chrome()
-        time.sleep(2)
+        用獨立的 BROWSER_PROFILE_DIR，不碰使用者主要的 Chrome——兩者各用各
+        的 user-data-dir，可同時執行、互不鎖定。使用者只需在這個視窗登入
+        YouTube 一次，登入狀態會永久保存在此設定檔。
+
+        關鍵旗標：
+        - --remote-allow-origins=*：Chrome 111+ 允許 CDP websocket 連線的必要
+          旗標，缺了會 403 連不上。
+        - 不加任何自動化旗標（如 --enable-automation），所以沒有「受自動測試
+          軟體控制」橫幅，navigator.webdriver 也是 false，Google 登入不會被擋。
+        """
+        os.makedirs(BROWSER_PROFILE_DIR, exist_ok=True)
+        self.ui_callback("SYSTEM", "正在開啟工具專用的 Chrome 視窗（不影響你主要的 Chrome）...")
 
         try:
             self._chrome_proc = subprocess.Popen(
@@ -296,10 +272,10 @@ class YouTubeLiveTacticalBot:
                     chrome_path,
                     f"--remote-debugging-port={port}",
                     "--remote-allow-origins=*",
-                    f"--user-data-dir={user_data}",
+                    f"--user-data-dir={BROWSER_PROFILE_DIR}",
                     "--no-first-run",
                     "--no-default-browser-check",
-                    "--restore-last-session",
+                    "--disable-blink-features=AutomationControlled",
                 ],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
@@ -312,7 +288,7 @@ class YouTubeLiveTacticalBot:
             if self._cdp_endpoint_ready(port):
                 return True
             time.sleep(0.5)
-        self.ui_callback("SYSTEM", "❌ Chrome 除錯埠未就緒，請確認沒有其他 Chrome 視窗殘留後重試。")
+        self.ui_callback("SYSTEM", "❌ Chrome 除錯埠未就緒，請重試。")
         return False
 
     def start_monitor(self, video_url: str):
@@ -336,15 +312,15 @@ class YouTubeLiveTacticalBot:
                         self.ui_callback("SYSTEM", "無法啟動：安裝後仍找不到 Chrome。")
                         return
 
-                # === CDP 接管：連上你已登入的真實 Chrome ===
-                # 若除錯埠已就緒（上次啟動留下的），直接連；否則用你的設定檔
-                # 重開一個帶除錯埠的 Chrome 再連。
+                # === 開工具專用 Chrome 視窗並用 CDP 接管 ===
+                # 若除錯埠已就緒（上次啟動留下、且已登入），直接連；否則開一個
+                # 獨立設定檔的 Chrome 視窗再連。不碰使用者主要的 Chrome。
                 if not self._cdp_endpoint_ready(CHROME_CDP_PORT):
                     if not self._launch_chrome_with_cdp(chrome_path, CHROME_CDP_PORT):
-                        self.ui_callback("SYSTEM", "無法啟動：無法接管 Chrome。")
+                        self.ui_callback("SYSTEM", "無法啟動：無法開啟 Chrome。")
                         return
 
-                self.ui_callback("SYSTEM", "✓ 已接管你的 Chrome（沿用已登入的 YouTube，無需重新登入）")
+                self.ui_callback("SYSTEM", "✓ Chrome 已就緒（首次使用請在這個視窗登入 YouTube 一次，之後永久記住）")
                 browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{CHROME_CDP_PORT}")
                 self._cdp_browser = browser
                 context = browser.contexts[0] if browser.contexts else browser.new_context()
@@ -357,8 +333,8 @@ class YouTubeLiveTacticalBot:
                 self.ui_callback("SYSTEM", f"系統：正在部署唯讀防禦雷達... 節目：{title}")
                 self.ui_callback(
                     "SYSTEM",
-                    "提示：本工具已沿用你 Chrome 內登入的 YouTube 帳號。"
-                    "若聊天室仍顯示未登入，請在 Chrome 視窗左上角切換到已登入的帳號。"
+                    "提示：這是工具專用的 Chrome 視窗，不影響你原本的 Chrome。"
+                    "首次使用若聊天室要求登入，請在此視窗登入 YouTube 一次，之後永久記住。"
                 )
                 self.page.goto(f"https://www.youtube.com/live_chat?v={video_id}")
 
