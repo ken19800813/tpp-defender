@@ -1353,39 +1353,12 @@ class App(ctk.CTk):
 
         priority_var = ctk.BooleanVar(value=initial_priority)
 
-        # === 關鍵字欄位 ===
-        label_keywords = ctk.CTkLabel(dlg, text="關鍵字 (用逗號分隔):", font=FONT_LABEL)
-        label_keywords.pack(anchor="w", padx=14, pady=(14, 6))
-
-        entry_keywords = ctk.CTkEntry(dlg, height=42, font=FONT_ENTRY, placeholder_text="例: 檳榔,哭文哲")
-        entry_keywords.pack(padx=14, pady=4, fill="x")
-        bind_paste(entry_keywords)
-        entry_keywords.insert(0, initial_keywords)
-
-        def update_keywords_state():
-            """最優先規則時，關鍵字欄變只讀+提示"""
-            if priority_var.get():
-                entry_keywords.configure(state="disabled", text_color="#999999")
-                entry_keywords.delete(0, "end")
-                entry_keywords.insert(0, "不管什麼垃圾字，所有攻擊都用此訊息回覆")
-            else:
-                entry_keywords.configure(state="normal", text_color=TEXT_COLOR)
-                entry_keywords.delete(0, "end")
-                entry_keywords.insert(0, initial_keywords)
-
-        # === 回覆草稿 ===
-        ctk.CTkLabel(dlg, text="回覆草稿 (每行一句):", font=FONT_LABEL).pack(anchor="w", padx=14, pady=(10, 6))
-        text_replies = scrolledtext.ScrolledText(dlg, height=8, font=FONT_MONO)
-        text_replies.pack(padx=14, pady=4, fill="both", expand=True)
-        text_replies.insert("1.0", initial_replies)
-        style_scrollbar(text_replies)
-
-        # === 最優先規則勾選框 ===
+        # === 最優先規則勾選框（放在最上面，讓使用者一開始就能決定） ===
         priority_row = ctk.CTkFrame(dlg, fg_color="transparent")
-        priority_row.pack(fill="x", padx=14, pady=(8, 0))
+        priority_row.pack(fill="x", padx=14, pady=(14, 10))
         priority_checkbox = ctk.CTkCheckBox(
             priority_row, text="設為最優先規則", font=FONT_LABEL, variable=priority_var,
-            fg_color=ACCENT, hover_color=ACCENT_HOVER, command=update_keywords_state
+            fg_color=ACCENT, hover_color=ACCENT_HOVER
         )
         priority_checkbox.pack(side="left")
         info_icon(
@@ -1396,8 +1369,37 @@ class App(ctk.CTk):
             side="left", padx=(8, 0)
         )
 
-        # 初始化狀態
+        # === 關鍵字欄位 ===
+        label_keywords = ctk.CTkLabel(dlg, text="關鍵字 (用逗號分隔):", font=FONT_LABEL)
+        label_keywords.pack(anchor="w", padx=14, pady=(0, 6))
+
+        entry_keywords = ctk.CTkEntry(dlg, height=42, font=FONT_ENTRY, placeholder_text="例: 檳榔,哭文哲")
+        entry_keywords.pack(padx=14, pady=4, fill="x")
+        bind_paste(entry_keywords)
+
+        def update_keywords_state():
+            """最優先規則時，關鍵字欄變只讀+提示；否則用初始值"""
+            if priority_var.get():
+                entry_keywords.configure(state="disabled", text_color="#999999")
+                entry_keywords.delete(0, "end")
+                entry_keywords.insert(0, "不管什麼垃圾字，所有攻擊都用此訊息回覆")
+            else:
+                entry_keywords.configure(state="normal", text_color=TEXT_COLOR)
+                entry_keywords.delete(0, "end")
+                entry_keywords.insert(0, initial_keywords)
+
+        # 初始化關鍵字欄狀態（根據優先規則是否勾選）
         update_keywords_state()
+
+        # 綁定 checkbox change 事件
+        priority_checkbox.configure(command=update_keywords_state)
+
+        # === 回覆草稿 ===
+        ctk.CTkLabel(dlg, text="回覆草稿 (每行一句):", font=FONT_LABEL).pack(anchor="w", padx=14, pady=(10, 6))
+        text_replies = scrolledtext.ScrolledText(dlg, height=8, font=FONT_MONO)
+        text_replies.pack(padx=14, pady=4, fill="both", expand=True)
+        text_replies.insert("1.0", initial_replies)
+        style_scrollbar(text_replies)
 
         def do_save():
             # 若是最優先規則，直接用虛擬關鍵字（系統內部不會看）
