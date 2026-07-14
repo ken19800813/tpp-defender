@@ -778,23 +778,24 @@ class App(ctk.CTk):
         # 右鍵菜單作為備選
         self._create_context_menu(self.entry_url)
 
+        # 順序：輸入框 → 貼上網址 → 啟動雷達 → 停止監控
+        self.btn_paste = ctk.CTkButton(
+            row2, text="貼上網址", command=self._paste_url, font=FONT_BUTTON,
+            fg_color="#3a4a4a", hover_color="#4a5a5a", height=48, width=120
+        )
+        self.btn_paste.pack(side="left", padx=4)
+
         self.btn_start = ctk.CTkButton(
             row2, text="啟動雷達", command=self.start_monitoring, font=FONT_BUTTON,
-            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a", height=48, width=150
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a", height=48, width=140
         )
         self.btn_start.pack(side="left", padx=4)
 
         self.btn_stop = ctk.CTkButton(
-            row2, text="停止", command=self.stop_monitoring, font=FONT_BUTTON,
-            fg_color="#444", hover_color="#555", height=48, width=110, state="disabled"
+            row2, text="停止監控", command=self.stop_monitoring, font=FONT_BUTTON,
+            fg_color="#444", hover_color="#555", height=48, width=120, state="disabled"
         )
         self.btn_stop.pack(side="left", padx=4)
-
-        self.btn_test_alert = ctk.CTkButton(
-            row2, text="測試彈跳視窗", command=self.trigger_test_alert, font=FONT_BUTTON,
-            fg_color="#3a4a4a", hover_color="#4a5a5a", height=48, width=150
-        )
-        self.btn_test_alert.pack(side="left", padx=4)
 
         row3 = ctk.CTkFrame(frame_url, fg_color="transparent")
         row3.pack(fill="x", pady=(10, 0))
@@ -862,14 +863,6 @@ class App(ctk.CTk):
             "全自動送出模式已開啟：偵測到側翼攻擊會直接送出回覆，不再跳出確認小窗。"
             if enabled else "全自動送出模式已關閉：偵測到側翼攻擊會跳出小窗，需手動確認才送出。"
         )
-
-    def trigger_test_alert(self):
-        """手動觸發一次假的側翼攻擊留言，用來確認彈窗機制本身正常運作"""
-        self.handle_bot_signal("ALERT", {
-            "author": "測試用假留言者",
-            "content": "（這是測試訊息，用來確認彈跳視窗機制正常運作）",
-            "reply": "這只是測試，不是真的側翼留言。"
-        })
 
     # ------------------------------------------------------------------
     # 分頁 2：防禦規則設定
@@ -1294,11 +1287,16 @@ class App(ctk.CTk):
         self.bot_manager.start(url)
 
     def stop_monitoring(self):
+        # bot_manager.stop() 內含 thread.join(timeout=2)，會等監控執行緒跑完
+        # 它的 finally: _save_session_log()——所以本場所有聊天記錄（含一般留言
+        # 與側翼標記）在這裡回傳前就已存進歷史記錄。
         self.bot_manager.stop()
         self.btn_start.configure(state="normal")
         self.btn_stop.configure(state="disabled")
         self.status_label.configure(text="狀態：待命", text_color="#888")
-        self.after(500, self.refresh_history_list)
+        # join 已等過存檔，這裡再稍延遲刷新，確保檔案系統寫入完成後列表最新
+        self.after(300, self.refresh_history_list)
+        self.after(1500, self.refresh_history_list)
 
     def handle_bot_signal(self, msg_type, data):
         if msg_type == "ALERT":
