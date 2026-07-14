@@ -573,7 +573,7 @@ class App(ctk.CTk):
         ctk.set_default_color_theme("dark-blue")
 
         self._rules_page = 0
-        self._rules_page_size = 10
+        self._rules_page_size = 6
         self._history_page = 0
         self._history_page_size = 6
 
@@ -904,8 +904,10 @@ class App(ctk.CTk):
             side="left", padx=(10, 0)
         )
 
+        # 不用 expand=True，避免規則列表把分頁列擠出可視範圍外——
+        # Treeview 本身的 height=列數 已經決定好高度，這裡只要橫向撐滿即可。
         tree_frame = ctk.CTkFrame(frame_list, fg_color="transparent")
-        tree_frame.pack(fill="both", expand=True)
+        tree_frame.pack(fill="x", expand=False)
 
         self.rules_tree = ttk.Treeview(
             tree_frame, columns=("no", "keywords", "replies", "source", "priority"), show="headings",
@@ -1548,7 +1550,11 @@ class App(ctk.CTk):
         def truncate(text, limit=60):
             return text if len(text) <= limit else text[:limit] + "..."
 
-        all_rules = self.config_mgr.rules
+        # 最優先規則永遠排最前面（跨頁排序，不受編輯/新增順序影響）
+        all_rules = sorted(
+            self.config_mgr.rules,
+            key=lambda r: 0 if getattr(r, "is_priority", False) else 1
+        )
         total = len(all_rules)
         total_pages = max(1, -(-total // self._rules_page_size))
         if self._rules_page >= total_pages:
