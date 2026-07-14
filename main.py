@@ -751,8 +751,8 @@ class App(ctk.CTk):
         )
         self.entry_url.pack(side="left", padx=(0, 10), fill="x", expand=True)
 
-        # 快捷鍵綁定：直接綁定到 Entry
-        def paste_on_entry(event=None):
+        # 全局快捷鍵綁定（在 root 層級，確保隨時觸發）
+        def paste_global(event=None):
             try:
                 url = pyperclip.paste()
                 if url:
@@ -762,9 +762,9 @@ class App(ctk.CTk):
                 pass
             return "break"
 
-        # 綁定 Ctrl+V (Windows/Linux) 和 Cmd+V (Mac)
-        self.entry_url.bind("<Control-v>", paste_on_entry)
-        self.entry_url.bind("<Command-v>", paste_on_entry)
+        # 綁定全局快捷鍵
+        self.bind_all("<Control-v>", paste_global)
+        self.bind_all("<Command-v>", paste_global)
 
         # 右鍵菜單作為備選
         self._create_context_menu(self.entry_url)
