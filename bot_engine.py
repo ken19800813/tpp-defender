@@ -12,16 +12,32 @@ class YouTubeLiveTacticalBot:
         self.page = None
 
     def check_channel_lock(self, video_url: str) -> bool:
-        """透過 YouTube 公開 OEmbed API 檢查該直播頻道是否屬於硬性鎖定黑名單"""
+        """透過 YouTube 公開 OEmbed API 檢查該直播頻道是否屬於硬性鎖定黑名單
+        支援 channel_id (UC...) 與 handle (@xxx) 雙重比對"""
         try:
             video_id = video_url.split("v=")[-1].split("&")[0]
             oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
             res = requests.get(oembed_url, timeout=4)
             if res.status_code == 200:
-                author_url = res.json().get("author_url", "")
+                data = res.json()
+                author_url = data.get("author_url", "")
+                author_name = data.get("author_name", "")
+
+                # 比對方式 1: Channel ID (UC...)
                 channel_id = author_url.split("/channel/")[-1] if "/channel/" in author_url else ""
-                if channel_id in self.config.locked_channels:
+                if channel_id and channel_id in self.config.locked_channels:
                     return True
+
+                # 比對方式 2: Handle (@xxx) - 來自 author_name
+                if author_name:
+                    handle = f"@{author_name}" if not author_name.startswith("@") else author_name
+                    if handle in self.config.locked_channels:
+                        return True
+                    # 支援 URL encode 的 handle
+                    import urllib.parse
+                    handle_encoded = urllib.parse.quote(handle.encode("utf-8")).replace("%40", "%40")
+                    if handle_encoded in self.config.locked_channels:
+                        return True
         except Exception:
             pass
         return False
