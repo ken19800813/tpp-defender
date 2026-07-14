@@ -4,8 +4,10 @@ from tkinter import messagebox, scrolledtext, ttk
 import pyperclip
 import uuid
 import os
+import sys
 import json
 import glob
+import subprocess
 from config import ConfigManager, Rule
 from logger_thread import BotThreadManager
 from bot_engine import LOGS_DIR
@@ -16,12 +18,14 @@ ACCENT_DIM = "#1c8a8a"
 DANGER = "#ff4d4d"
 BG_PANEL = "#161b1b"
 LOG_WHITE = "#ffffff"
+SCROLL_BG = "#1c2626"
+SCROLL_TROUGH = "#0a0f0f"
 
 # 全域字體（再放大兩級）
 FONT_BRAND = ("Arial", 30, "bold")
 FONT_TAGLINE = ("Arial", 18)
 FONT_STATUS = ("Arial", 17, "bold")
-FONT_TAB = ("Arial", 18, "bold")
+FONT_TAB = ("Arial", 17, "bold")
 FONT_SECTION = ("Arial", 20, "bold")
 FONT_LABEL = ("Arial", 16)
 FONT_LABEL_BOLD = ("Arial", 16, "bold")
@@ -32,6 +36,31 @@ FONT_MONO_SMALL = ("Courier New", 14)
 FONT_TOOLTIP = ("Arial", 14)
 FONT_ICON = ("Arial", 16, "bold")
 FONT_MARQUEE = ("Courier New", 15, "bold")
+
+
+def style_scrollbar(widget):
+    """把 tkinter Text/ScrolledText 內建的淺色捲軸改成深色，避免跟深色主題衝突"""
+    try:
+        sb = widget.vbar
+        sb.configure(
+            bg=SCROLL_BG, troughcolor=SCROLL_TROUGH, activebackground=ACCENT_DIM,
+            highlightthickness=0, bd=0, elementborderwidth=0, width=14
+        )
+    except Exception:
+        pass
+
+
+def bring_chat_browser_to_front():
+    """把監看用的瀏覽器視窗帶到最前面，方便直接貼上回覆（僅macOS，其他平台靜默跳過）"""
+    if sys.platform != "darwin":
+        return
+    try:
+        subprocess.run(
+            ["osascript", "-e", 'tell application "Chromium" to activate'],
+            timeout=2, capture_output=True
+        )
+    except Exception:
+        pass
 
 
 class ToolTip:
@@ -71,8 +100,31 @@ def info_icon(parent, text, **pack_kwargs):
     return icon
 
 
+def pagination_bar(parent, on_prev, on_next, **pack_kwargs):
+    """建立一組上一頁/頁碼/下一頁的分頁控制列，回傳(frame, page_label, prev_btn, next_btn)"""
+    bar = ctk.CTkFrame(parent, fg_color="transparent")
+    bar.pack(**pack_kwargs)
+
+    prev_btn = ctk.CTkButton(
+        bar, text="上一頁", command=on_prev, font=FONT_BUTTON,
+        fg_color="#444", hover_color="#555", height=38, width=100
+    )
+    prev_btn.pack(side="left", padx=4)
+
+    page_label = ctk.CTkLabel(bar, text="第 1 / 1 頁", font=FONT_LABEL, text_color="#8fb3b3")
+    page_label.pack(side="left", padx=10)
+
+    next_btn = ctk.CTkButton(
+        bar, text="下一頁", command=on_next, font=FONT_BUTTON,
+        fg_color="#444", hover_color="#555", height=38, width=100
+    )
+    next_btn.pack(side="left", padx=4)
+
+    return bar, page_label, prev_btn, next_btn
+
+
 class Marquee(ctk.CTkFrame):
-    """底部跑馬燈：文字從視窗最右側進場，往左捲動，內容由雲端 GitHub 同步的 marquee_messages 更新"""
+    """底部跑馬燈：文字從視窗最右側進場，往左捲動，內容由 LINEBOT 後台同步的 marquee_messages 更新"""
     def __init__(self, parent, get_messages, **kwargs):
         super().__init__(parent, **kwargs)
         self.get_messages = get_messages
@@ -124,7 +176,7 @@ class Marquee(ctk.CTkFrame):
 
 
 class NotificationPopUp(ctk.CTkToplevel):
-    """置頂警示小彈窗：由真人點擊觸發一鍵複製到剪貼簿"""
+    """置頂警示小彈窗：由真人點擊觸發一鍵複製到剪貼簿，並自動把聊天室瀏覽器帶到最前面"""
     def __init__(self, parent, author, content, reply, ui_log_callback):
         super().__init__(parent)
         self.reply_text = reply
@@ -154,7 +206,7 @@ class NotificationPopUp(ctk.CTkToplevel):
         ).pack(pady=6)
 
         self.btn_copy = ctk.CTkButton(
-            self, text=f"複製反擊建議：{reply[:20]}...",
+            self, text=f"複製反擊建議並切到聊天室：{reply[:14]}...",
             font=FONT_BUTTON,
             fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a",
             command=self.on_click_copy, height=46
@@ -167,6 +219,7 @@ class NotificationPopUp(ctk.CTkToplevel):
         pyperclip.copy(self.reply_text)
         self.ui_log_callback("SYSTEM", f"反擊建議已複製到系統剪貼簿：{self.reply_text}")
         self.destroy()
+        bring_chat_browser_to_front()
 
 
 class App(ctk.CTk):
@@ -174,18 +227,46 @@ class App(ctk.CTk):
         super().__init__()
         self.title("直播小幫手：打擊青鳥人人有責")
         self.geometry("1320x920")
-        self.minsize(1140, 780)
+        self.minsize(1100, 760)
         ctk.set_appearance_mode("Dark")
         ctk.set_default_color_theme("dark-blue")
 
+        self._rules_page = 0
+        self._rules_page_size = 10
+        self._history_page = 0
+        self._history_page_size = 6
+
         self.config_mgr = ConfigManager()
         self.bot_manager = BotThreadManager(self.config_mgr, self.handle_bot_signal)
+        self._setup_ttk_styles()
         self.setup_ui()
 
+    def _setup_ttk_styles(self):
+        """統一設定深色主題下的Treeview/Scrollbar樣式(ttk預設是淺色，跟整體風格衝突)"""
+        style = ttk.Style()
+        style.theme_use("default")
+        style.configure(
+            "Rules.Treeview",
+            background="#0a0f0f", fieldbackground="#0a0f0f", foreground=LOG_WHITE,
+            rowheight=36, font=("Arial", 14), borderwidth=0
+        )
+        style.configure(
+            "Rules.Treeview.Heading",
+            background=BG_PANEL, foreground=ACCENT, font=("Arial", 15, "bold"), borderwidth=0
+        )
+        style.map("Rules.Treeview", background=[("selected", ACCENT_DIM)])
+
+        style.configure(
+            "Dark.Vertical.TScrollbar",
+            background=SCROLL_BG, troughcolor=SCROLL_TROUGH, bordercolor=BG_PANEL,
+            arrowcolor=ACCENT, gripcount=0, relief="flat"
+        )
+        style.map("Dark.Vertical.TScrollbar", background=[("active", ACCENT_DIM)])
+
     def setup_ui(self):
-        """繪製整體介面：頂部品牌列 + 分頁 + 底部跑馬燈"""
+        """繪製整體介面：頂部品牌列 + 靠左頁籤列 + 內容區 + 底部跑馬燈"""
         top_frame = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=10)
-        top_frame.pack(fill="x", padx=16, pady=(16, 10))
+        top_frame.pack(fill="x", padx=16, pady=(16, 8))
 
         title_box = ctk.CTkFrame(top_frame, fg_color="transparent")
         title_box.pack(side="left", padx=18, pady=14)
@@ -205,25 +286,40 @@ class App(ctk.CTk):
         )
         self.status_label.pack(side="right", padx=20)
 
-        # 分頁
-        self.tabview = ctk.CTkTabview(
-            self, fg_color=BG_PANEL,
-            segmented_button_selected_color=ACCENT,
-            segmented_button_selected_hover_color=ACCENT_HOVER,
-            segmented_button_unselected_color="#202929",
-        )
-        self.tabview.pack(fill="both", expand=True, padx=16, pady=(0, 8))
-        self.tabview._segmented_button.configure(font=FONT_TAB, height=50)
+        # 靠左的頁籤按鈕列（自製，不用CTkTabview內建的置中拉伸樣式）
+        tab_bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=10)
+        tab_bar.pack(fill="x", padx=16, pady=(0, 8))
 
-        self.tabview.add("直播監控")
-        self.tabview.add("防禦規則設定")
-        self.tabview.add("反擊建議")
-        self.tabview.add("歷史記錄")
+        btn_row = ctk.CTkFrame(tab_bar, fg_color="transparent")
+        btn_row.pack(side="left", padx=8, pady=8)
 
-        self.init_monitor_tab()
-        self.init_rules_tab()
-        self.init_poison_pill_tab()
-        self.init_history_tab()
+        self.tab_names = ["直播監控", "防禦規則設定", "反擊建議", "歷史記錄"]
+        self.tab_buttons = {}
+        self.tab_frames = {}
+
+        for name in self.tab_names:
+            btn = ctk.CTkButton(
+                btn_row, text=name, font=FONT_TAB, height=46, width=180,
+                corner_radius=8, border_width=0,
+                fg_color="transparent", hover_color="#243333", text_color="#9fd9d9",
+                command=lambda n=name: self.switch_tab(n)
+            )
+            btn.pack(side="left", padx=4)
+            self.tab_buttons[name] = btn
+
+        content_container = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=10)
+        content_container.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+
+        for name in self.tab_names:
+            frame = ctk.CTkFrame(content_container, fg_color="transparent")
+            self.tab_frames[name] = frame
+
+        self.init_monitor_tab(self.tab_frames["直播監控"])
+        self.init_rules_tab(self.tab_frames["防禦規則設定"])
+        self.init_poison_pill_tab(self.tab_frames["反擊建議"])
+        self.init_history_tab(self.tab_frames["歷史記錄"])
+
+        self.switch_tab(self.tab_names[0])
 
         # 底部跑馬燈
         self.marquee = Marquee(
@@ -232,12 +328,20 @@ class App(ctk.CTk):
         )
         self.marquee.pack(fill="x", padx=16, pady=(0, 16))
 
+    def switch_tab(self, name):
+        for n, frame in self.tab_frames.items():
+            frame.pack_forget()
+        self.tab_frames[name].pack(fill="both", expand=True, padx=6, pady=6)
+        for n, btn in self.tab_buttons.items():
+            if n == name:
+                btn.configure(fg_color=ACCENT, text_color="#0a0a0a", hover_color=ACCENT_HOVER)
+            else:
+                btn.configure(fg_color="transparent", text_color="#9fd9d9", hover_color="#243333")
+
     # ------------------------------------------------------------------
     # 分頁 1：直播監控
     # ------------------------------------------------------------------
-    def init_monitor_tab(self):
-        tab = self.tabview.tab("直播監控")
-
+    def init_monitor_tab(self, tab):
         frame_url = ctk.CTkFrame(tab, fg_color="transparent")
         frame_url.pack(fill="x", padx=8, pady=(14, 6))
 
@@ -298,12 +402,16 @@ class App(ctk.CTk):
             side="left", padx=(10, 0)
         )
 
+        log_frame = ctk.CTkFrame(frame_log, fg_color="transparent")
+        log_frame.pack(fill="both", expand=True)
+
         self.log_text = scrolledtext.ScrolledText(
-            frame_log, height=20, bg="#0a0f0f", fg=LOG_WHITE,
+            log_frame, height=20, bg="#0a0f0f", fg=LOG_WHITE,
             insertbackground=LOG_WHITE, font=FONT_MONO, borderwidth=0, spacing1=4, spacing3=4
         )
         self.log_text.pack(fill="both", expand=True)
         self.log_text.config(state="disabled")
+        style_scrollbar(self.log_text)
 
         self.log_text.tag_config("ALERT", foreground="#ff4444", background="#1a0000")
         self.log_text.tag_config("SYSTEM", foreground="#8fb3b3")
@@ -320,9 +428,7 @@ class App(ctk.CTk):
     # ------------------------------------------------------------------
     # 分頁 2：防禦規則設定
     # ------------------------------------------------------------------
-    def init_rules_tab(self):
-        tab = self.tabview.tab("防禦規則設定")
-
+    def init_rules_tab(self, tab):
         header = ctk.CTkFrame(tab, fg_color="transparent")
         header.pack(fill="x", padx=8, pady=(14, 6))
         ctk.CTkLabel(header, text="防禦規則", font=FONT_SECTION).pack(side="left")
@@ -359,36 +465,26 @@ class App(ctk.CTk):
             side="left", padx=(10, 0)
         )
 
-        style = ttk.Style()
-        style.theme_use("default")
-        style.configure(
-            "Rules.Treeview",
-            background="#0a0f0f", fieldbackground="#0a0f0f", foreground=LOG_WHITE,
-            rowheight=34, font=("Arial", 14), borderwidth=0
-        )
-        style.configure(
-            "Rules.Treeview.Heading",
-            background=BG_PANEL, foreground=ACCENT, font=("Arial", 15, "bold"), borderwidth=0
-        )
-        style.map("Rules.Treeview", background=[("selected", ACCENT_DIM)])
-
         tree_frame = ctk.CTkFrame(frame_list, fg_color="transparent")
         tree_frame.pack(fill="both", expand=True)
 
         self.rules_tree = ttk.Treeview(
             tree_frame, columns=("no", "keywords", "replies", "source"), show="headings",
-            style="Rules.Treeview"
+            style="Rules.Treeview", height=self._rules_page_size
         )
         self.rules_tree.heading("no", text="編號")
         self.rules_tree.heading("keywords", text="偵測關鍵字")
         self.rules_tree.heading("replies", text="反擊內容")
         self.rules_tree.heading("source", text="來源")
-        self.rules_tree.column("no", width=60, anchor="center")
-        self.rules_tree.column("keywords", width=420, anchor="w")
-        self.rules_tree.column("replies", width=420, anchor="w")
-        self.rules_tree.column("source", width=90, anchor="center")
+        self.rules_tree.column("no", width=60, minwidth=50, anchor="center", stretch=False)
+        self.rules_tree.column("keywords", width=420, minwidth=200, anchor="w", stretch=True)
+        self.rules_tree.column("replies", width=420, minwidth=200, anchor="w", stretch=True)
+        self.rules_tree.column("source", width=90, minwidth=80, anchor="center", stretch=False)
 
-        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.rules_tree.yview)
+        scrollbar = ttk.Scrollbar(
+            tree_frame, orient="vertical", command=self.rules_tree.yview,
+            style="Dark.Vertical.TScrollbar"
+        )
         self.rules_tree.configure(yscrollcommand=scrollbar.set)
         self.rules_tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -399,14 +495,28 @@ class App(ctk.CTk):
         self._rules_by_iid = {}
         self.rules_tree.bind("<Double-1>", self._on_rule_row_double_click)
 
+        _, self.rules_page_label, self.rules_prev_btn, self.rules_next_btn = pagination_bar(
+            frame_list, self._rules_prev_page, self._rules_next_page,
+            fill="x", pady=(8, 0)
+        )
+
         self.refresh_rules_display()
+
+    def _rules_prev_page(self):
+        if self._rules_page > 0:
+            self._rules_page -= 1
+            self.refresh_rules_display()
+
+    def _rules_next_page(self):
+        total_pages = max(1, -(-len(self.config_mgr.rules) // self._rules_page_size))
+        if self._rules_page < total_pages - 1:
+            self._rules_page += 1
+            self.refresh_rules_display()
 
     # ------------------------------------------------------------------
     # 分頁 3：反擊建議
     # ------------------------------------------------------------------
-    def init_poison_pill_tab(self):
-        tab = self.tabview.tab("反擊建議")
-
+    def init_poison_pill_tab(self, tab):
         header = ctk.CTkFrame(tab, fg_color="transparent")
         header.pack(fill="x", padx=8, pady=(14, 4))
         ctk.CTkLabel(
@@ -428,10 +538,11 @@ class App(ctk.CTk):
         ).pack(anchor="w", padx=8, pady=(0, 8))
 
         self.poison_pill_text = scrolledtext.ScrolledText(
-            tab, height=6, bg="#0a0f0f", fg="#ffe066", font=FONT_MONO, borderwidth=0,
+            tab, height=5, bg="#0a0f0f", fg="#ffe066", font=FONT_MONO, borderwidth=0,
             spacing1=4, spacing3=4
         )
         self.poison_pill_text.pack(fill="x", padx=8, pady=4)
+        style_scrollbar(self.poison_pill_text)
 
         frame_buttons = ctk.CTkFrame(tab, fg_color="transparent")
         frame_buttons.pack(fill="x", padx=8, pady=12)
@@ -449,26 +560,25 @@ class App(ctk.CTk):
         ).pack(side="left")
         info_icon(
             cloud_header,
-            "這是目前從雲端（GitHub）同步下來的預設反擊建議語句庫預覽，\n"
+            "這是目前從雲端同步下來的預設反擊建議語句庫預覽，\n"
             "此區塊僅供參考，無法在此編輯；\n"
             "上方文字框儲存後會覆蓋你本機使用的語句庫。",
             side="left", padx=(10, 0)
         )
 
         self.cloud_pills_text = scrolledtext.ScrolledText(
-            tab, height=14, bg="#121818", fg="#cfcfcf",
+            tab, height=16, bg="#121818", fg="#cfcfcf",
             font=FONT_MONO, borderwidth=0, state="disabled", spacing1=5, spacing3=5
         )
         self.cloud_pills_text.pack(fill="both", expand=True, padx=8, pady=(0, 10))
+        style_scrollbar(self.cloud_pills_text)
 
         self.refresh_cloud_pills_display()
 
     # ------------------------------------------------------------------
     # 分頁 4：歷史記錄
     # ------------------------------------------------------------------
-    def init_history_tab(self):
-        tab = self.tabview.tab("歷史記錄")
-
+    def init_history_tab(self, tab):
         header = ctk.CTkFrame(tab, fg_color="transparent")
         header.pack(fill="x", padx=8, pady=(14, 6))
         ctk.CTkLabel(header, text="歷史直播記錄", font=FONT_SECTION).pack(side="left")
@@ -486,13 +596,38 @@ class App(ctk.CTk):
             fg_color="#444", hover_color="#555", height=42, width=130
         ).pack(side="right")
 
-        self.history_scroll = ctk.CTkScrollableFrame(tab, fg_color="#0f1515")
-        self.history_scroll.pack(fill="both", expand=True, padx=8, pady=(6, 12))
+        self.history_scroll = ctk.CTkScrollableFrame(
+            tab, fg_color="#0f1515",
+            scrollbar_fg_color=SCROLL_TROUGH, scrollbar_button_color=SCROLL_BG,
+            scrollbar_button_hover_color=ACCENT_DIM
+        )
+        self.history_scroll.pack(fill="both", expand=True, padx=8, pady=(6, 8))
+
+        _, self.history_page_label, self.history_prev_btn, self.history_next_btn = pagination_bar(
+            tab, self._history_prev_page, self._history_next_page,
+            fill="x", padx=8, pady=(0, 12)
+        )
 
         self.refresh_history_list()
 
+    def _history_prev_page(self):
+        if self._history_page > 0:
+            self._history_page -= 1
+            self.refresh_history_list()
+
+    def _history_next_page(self):
+        total_pages = max(1, -(-self._history_total_count() // self._history_page_size))
+        if self._history_page < total_pages - 1:
+            self._history_page += 1
+            self.refresh_history_list()
+
+    def _history_total_count(self):
+        if not os.path.isdir(LOGS_DIR):
+            return 0
+        return len(glob.glob(os.path.join(LOGS_DIR, "*.json")))
+
     def refresh_history_list(self):
-        """掃描 logs/ 目錄，列出所有歷史直播記錄"""
+        """掃描 logs/ 目錄，列出目前頁碼的歷史直播記錄"""
         for widget in self.history_scroll.winfo_children():
             widget.destroy()
 
@@ -500,14 +635,26 @@ class App(ctk.CTk):
         if os.path.isdir(LOGS_DIR):
             files = sorted(glob.glob(os.path.join(LOGS_DIR, "*.json")), reverse=True)
 
-        if not files:
+        total = len(files)
+        total_pages = max(1, -(-total // self._history_page_size))
+        if self._history_page >= total_pages:
+            self._history_page = max(0, total_pages - 1)
+
+        start = self._history_page * self._history_page_size
+        page_files = files[start:start + self._history_page_size]
+
+        self.history_page_label.configure(text=f"第 {self._history_page + 1} / {total_pages} 頁（共 {total} 場）")
+        self.history_prev_btn.configure(state="normal" if self._history_page > 0 else "disabled")
+        self.history_next_btn.configure(state="normal" if self._history_page < total_pages - 1 else "disabled")
+
+        if not page_files:
             ctk.CTkLabel(
                 self.history_scroll, text="目前尚無歷史記錄，直播監控結束後會自動出現在這裡。",
                 font=FONT_LABEL, text_color="#888"
             ).pack(anchor="w", padx=12, pady=12)
             return
 
-        for path in files:
+        for path in page_files:
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
@@ -571,6 +718,7 @@ class App(ctk.CTk):
         win = ctk.CTkToplevel(self)
         win.title(data.get("title", "直播記錄"))
         win.geometry("900x720")
+        win.minsize(640, 480)
         win.attributes("-topmost", True)
 
         ctk.CTkLabel(
@@ -597,6 +745,7 @@ class App(ctk.CTk):
         viewer.tag_config("FLAGGED", foreground="#ff4444")
         viewer.tag_config("NORMAL", foreground=LOG_WHITE)
         viewer.tag_config("SEARCH_HIT", background="#ffe066", foreground="#0a0a0a")
+        style_scrollbar(viewer)
 
         for msg in data.get("messages", []):
             line = f"[{msg.get('time', '')}] {msg.get('author', '')}: {msg.get('content', '')}\n"
@@ -715,6 +864,7 @@ class App(ctk.CTk):
         dlg = ctk.CTkToplevel(self)
         dlg.title(title)
         dlg.geometry("620x520")
+        dlg.minsize(480, 400)
         dlg.attributes("-topmost", True)
 
         ctk.CTkLabel(dlg, text="關鍵字 (用逗號分隔):", font=FONT_LABEL).pack(anchor="w", padx=14, pady=(14, 6))
@@ -726,6 +876,7 @@ class App(ctk.CTk):
         text_replies = scrolledtext.ScrolledText(dlg, height=8, font=FONT_MONO)
         text_replies.pack(padx=14, pady=4, fill="both", expand=True)
         text_replies.insert("1.0", initial_replies)
+        style_scrollbar(text_replies)
 
         def do_save():
             keywords = [k.strip() for k in entry_keywords.get().split(",") if k.strip()]
@@ -769,11 +920,16 @@ class App(ctk.CTk):
         picker = ctk.CTkToplevel(self)
         picker.title("選擇要編輯的規則")
         picker.geometry("520x420")
+        picker.minsize(420, 320)
         picker.attributes("-topmost", True)
 
         ctk.CTkLabel(picker, text="選擇要編輯的自訂規則：", font=FONT_LABEL).pack(anchor="w", padx=14, pady=12)
 
-        scroll = ctk.CTkScrollableFrame(picker, fg_color="#0f1515")
+        scroll = ctk.CTkScrollableFrame(
+            picker, fg_color="#0f1515",
+            scrollbar_fg_color=SCROLL_TROUGH, scrollbar_button_color=SCROLL_BG,
+            scrollbar_button_hover_color=ACCENT_DIM
+        )
         scroll.pack(fill="both", expand=True, padx=14, pady=(0, 14))
 
         def open_editor_for(rule):
@@ -818,11 +974,16 @@ class App(ctk.CTk):
         dlg = ctk.CTkToplevel(self)
         dlg.title("刪除規則")
         dlg.geometry("520x420")
+        dlg.minsize(420, 320)
         dlg.attributes("-topmost", True)
 
         ctk.CTkLabel(dlg, text="選擇要刪除的自訂規則：", font=FONT_LABEL).pack(anchor="w", padx=14, pady=12)
 
-        scroll = ctk.CTkScrollableFrame(dlg, fg_color="#0f1515")
+        scroll = ctk.CTkScrollableFrame(
+            dlg, fg_color="#0f1515",
+            scrollbar_fg_color=SCROLL_TROUGH, scrollbar_button_color=SCROLL_BG,
+            scrollbar_button_hover_color=ACCENT_DIM
+        )
         scroll.pack(fill="both", expand=True, padx=14, pady=(0, 14))
 
         def do_delete(rule_id):
@@ -851,7 +1012,16 @@ class App(ctk.CTk):
         def truncate(text, limit=60):
             return text if len(text) <= limit else text[:limit] + "..."
 
-        for idx, rule in enumerate(self.config_mgr.rules, start=1):
+        all_rules = self.config_mgr.rules
+        total = len(all_rules)
+        total_pages = max(1, -(-total // self._rules_page_size))
+        if self._rules_page >= total_pages:
+            self._rules_page = max(0, total_pages - 1)
+
+        start = self._rules_page * self._rules_page_size
+        page_rules = list(enumerate(all_rules, start=1))[start:start + self._rules_page_size]
+
+        for idx, rule in page_rules:
             is_user = rule.id in user_rule_ids
             keywords_str = truncate(", ".join(rule.trigger_keywords))
             replies_str = truncate(" / ".join(rule.reply_pool))
@@ -863,6 +1033,10 @@ class App(ctk.CTk):
             )
             self._rules_by_iid[iid] = rule
 
+        self.rules_page_label.configure(text=f"第 {self._rules_page + 1} / {total_pages} 頁（共 {total} 條規則）")
+        self.rules_prev_btn.configure(state="normal" if self._rules_page > 0 else "disabled")
+        self.rules_next_btn.configure(state="normal" if self._rules_page < total_pages - 1 else "disabled")
+
     def _on_rule_row_double_click(self, event):
         iid = self.rules_tree.identify_row(event.y)
         rule = self._rules_by_iid.get(iid)
@@ -872,6 +1046,7 @@ class App(ctk.CTk):
         win = ctk.CTkToplevel(self)
         win.title("規則詳細內容")
         win.geometry("620x520")
+        win.minsize(480, 400)
         win.attributes("-topmost", True)
 
         ctk.CTkLabel(win, text="偵測關鍵字", font=FONT_LABEL_BOLD, text_color=ACCENT).pack(anchor="w", padx=16, pady=(16, 4))
@@ -879,12 +1054,14 @@ class App(ctk.CTk):
         kw_box.pack(fill="x", padx=16)
         kw_box.insert("1.0", "、".join(rule.trigger_keywords))
         kw_box.config(state="disabled")
+        style_scrollbar(kw_box)
 
         ctk.CTkLabel(win, text="反擊內容", font=FONT_LABEL_BOLD, text_color=ACCENT).pack(anchor="w", padx=16, pady=(14, 4))
         rp_box = scrolledtext.ScrolledText(win, height=10, font=FONT_MONO_SMALL, bg="#0a0f0f", fg=LOG_WHITE, borderwidth=0)
         rp_box.pack(fill="both", expand=True, padx=16, pady=(0, 16))
         rp_box.insert("1.0", "\n".join(rule.reply_pool))
         rp_box.config(state="disabled")
+        style_scrollbar(rp_box)
 
     def save_poison_pills(self):
         pills = [p.strip() for p in self.poison_pill_text.get("1.0", "end").split("\n") if p.strip()]
