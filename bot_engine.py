@@ -212,6 +212,30 @@ class YouTubeLiveTacticalBot:
             self.ui_callback("SYSTEM", f"❌ 瀏覽器元件安裝失敗：{str(e)[:100]}")
             return False
 
+    def _find_system_chrome(self):
+        """尋找系統已安裝的 Chrome 瀏覽器"""
+        chrome_paths = []
+
+        if sys.platform == "win32":
+            chrome_paths = [
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            ]
+        elif sys.platform == "darwin":
+            chrome_paths = [
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            ]
+        elif sys.platform == "linux":
+            chrome_paths = [
+                "/usr/bin/google-chrome",
+                "/usr/bin/chromium",
+            ]
+
+        for path in chrome_paths:
+            if os.path.exists(path):
+                return path
+        return None
+
     def start_monitor(self, video_url: str):
         """啟動唯讀雷達監聽"""
         if self.check_channel_lock(video_url):
@@ -221,18 +245,31 @@ class YouTubeLiveTacticalBot:
         self.is_running = True
         try:
             with sync_playwright() as p:
-                # 確保 Chromium 已安裝
-                if not self._ensure_chromium_installed(p):
-                    self.ui_callback("SYSTEM", "無法啟動：缺少瀏覽器元件，請確認網路連線後重試。")
-                    return
-
-                # 建立持久化上下文，登入狀態會跨次啟動保存
                 os.makedirs(BROWSER_PROFILE_DIR, exist_ok=True)
-                context = p.chromium.launch_persistent_context(
-                    BROWSER_PROFILE_DIR,
-                    headless=False,
-                    args=["--disable-blink-features=AutomationControlled"]
-                )
+
+                # 優先用系統已安裝的 Chrome
+                chrome_path = self._find_system_chrome()
+                if chrome_path:
+                    self.ui_callback("SYSTEM", "✓ 偵測到系統 Chrome，直接使用。")
+                    context = p.chromium.launch_persistent_context(
+                        BROWSER_PROFILE_DIR,
+                        executable_path=chrome_path,
+                        headless=False,
+                        args=["--disable-blink-features=AutomationControlled"]
+                    )
+                else:
+                    # 找不到 Chrome，自動下載 Chromium
+                    if not self._ensure_chromium_installed(p):
+                        self.ui_callback("SYSTEM", "無法啟動：缺少瀏覽器元件，請確認網路連線後重試。")
+                        return
+
+                    self.ui_callback("SYSTEM", "系統未安裝 Chrome，改用 Chromium。")
+                    context = p.chromium.launch_persistent_context(
+                        BROWSER_PROFILE_DIR,
+                        headless=False,
+                        args=["--disable-blink-features=AutomationControlled"]
+                    )
+
                 self.page = context.pages[0] if context.pages else context.new_page()
                 video_id = video_url.split("v=")[-1].split("&")[0]
 
