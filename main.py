@@ -66,9 +66,36 @@ def bring_chat_browser_to_front():
 # 基本髒話/粗俗字眼黑名單（本機固定，跟雲端 forbidden_words 疊加檢查）。
 # 這裡只抓明顯的髒話本身，不含泛政治攻擊詞彙——那些已由雲端
 # forbidden_words 另外把關，避免這份清單過度擴張誤擋正常反擊言論。
+#
+# 注意：「乾」故意沒收錄——這是「乾淨/餅乾/乾脆」等日常用字，用單純
+# 字串比對(word in text)會讓一堆正常句子被誤判，只有刻意當「幹」的
+# 諧音替代時才是髒話，本機比對邏輯抓不出這種語境差異，收錄弊大於利。
 LOCAL_PROFANITY_BLOCKLIST = [
-    "幹你", "你媽的", "媽的", "他媽的", "三字經", "王八蛋", "幹你娘",
-    "去你的", "白痴", "智障", "賤人", "婊子", "幹拎老師", "干你娘",
+    # 直接髒話
+    "幹", "肏", "靠", "靠北", "靠夭", "操", "操你", "幹你", "幹你娘", "幹你媽",
+    "幹林娘", "幹拎娘", "姦", "雞巴", "雞掰", "機掰", "雞掰人", "機八", "G8",
+    "JB", "雞雞", "屌", "懶叫", "老二", "龜頭", "陰道", "屄", "婊子", "賤貨",
+    "淫娃", "騷貨",
+    # 問候親屬類
+    "去你媽的", "去死", "死全家", "你媽的", "他媽的", "幹你祖宗", "幹你全家",
+    "問候祖宗十八代",
+    # 智力、人格辱罵
+    "白癡", "智障", "腦殘", "低能", "廢物", "垃圾", "人渣", "王八蛋", "混蛋",
+    "畜生", "禽獸", "北七", "白目", "白爛", "三八", "神經病", "瘋子", "笨蛋",
+    "呆子", "蠢貨", "廢咖", "廢柴", "廢渣",
+    # 台語常見
+    "幹恁娘", "幹恁老師", "幹拎老師", "幹林老師", "肖欸", "肖查某", "肖年欸",
+    # 網路常見辱罵
+    "狗東西", "狗雜種", "狗娘養的", "賤人", "死屁孩", "垃圾人", "社會敗類",
+    "人妖", "臭婊", "臭俗辣", "廢物仔", "可悲", "可憐", "滾", "滾蛋", "吃屎",
+    "吃大便", "吃土",
+    # 縮寫、變形、規避審查（短碼類有誤判風險，例如"38"可能出現在數字裡，
+    # 使用者已明確要求收錄，先照做但請留意這個取捨）
+    "J8", "87", "38", "MD", "TMD", "NMSL", "SB", "CNM", "WTF", "Fxxk", "F***",
+    "fk", "sh*t", "bitch", "asshole", "mf",
+    # 常見諧音／替代寫法
+    "淦", "榦", "靠邀", "靠妖", "靠腰", "G掰", "北妻", "B7",
+    "ㄐㄅ", "ㄐㄅㄌ", "ㄍㄋㄋ", "ㄍㄋㄇ", "ㄎㄅ", "ㄎㄧㄅ", "ㄐㄓ",
 ]
 
 
@@ -79,6 +106,28 @@ def find_forbidden_word(text, extra_forbidden_words=None):
         if word and word in text:
             return word
     return None
+
+
+def bind_paste(entry):
+    """手動接管Ctrl+V/Cmd+V貼上，直接讀系統剪貼簿寫入欄位。
+    CTkEntry在某些平台上第一次貼上會失敗、要貼過一次才穩定，
+    直接接管可以避免依賴Tk內建、時機不穩的貼上虛擬事件。"""
+    def do_paste(event=None):
+        try:
+            text = entry.clipboard_get()
+        except Exception:
+            return "break"
+        try:
+            if entry.selection_present():
+                entry.delete("sel.first", "sel.last")
+        except Exception:
+            pass
+        entry.insert("insert", text)
+        return "break"
+
+    entry.bind("<Control-v>", do_paste)
+    entry.bind("<Command-v>", do_paste)
+    return entry
 
 
 class ToolTip:
@@ -268,8 +317,6 @@ class NotificationPopUp(ctk.CTkToplevel):
         self.reply_box.pack(fill="x", padx=16, pady=(4, 4))
         self.reply_box.insert("1.0", reply)
         self.reply_box.bind("<KeyRelease>", self._on_text_changed)
-        self.reply_box.bind("<Return>", self._on_return_key)
-        self.reply_box.bind("<Shift-Return>", lambda e: None)
 
         self.warning_label = ctk.CTkLabel(
             self, text="", font=("Arial", 13, "bold"), text_color=DANGER
@@ -294,11 +341,6 @@ class NotificationPopUp(ctk.CTkToplevel):
 
         self.reply_box.focus_set()
         self._on_text_changed()
-
-    def _on_return_key(self, event):
-        """在編輯框按 Enter＝送出，Shift+Enter 才是換行（符合一般聊天輸入習慣）"""
-        self.on_click_send()
-        return "break"
 
     def _get_text(self) -> str:
         return self.reply_box.get("1.0", "end").strip()
@@ -333,8 +375,8 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("直播小幫手：打擊青鳥人人有責")
-        self.geometry("1320x920")
-        self.minsize(1100, 760)
+        self.geometry("1140x760")
+        self.minsize(980, 640)
         ctk.set_appearance_mode("Dark")
         ctk.set_default_color_theme("dark-blue")
 
@@ -414,6 +456,17 @@ class App(ctk.CTk):
             btn.pack(side="left", padx=4)
             self.tab_buttons[name] = btn
 
+        # 底部跑馬燈：必須在 content_container 之前 pack（且用 side="bottom"），
+        # 這樣它會先從視窗底部佔到自己需要的固定高度，視窗縮小時是
+        # content_container（可伸縮區）先被壓縮，跑馬燈永遠不會被擠到消失。
+        # 如果反過來讓 expand=True 的 content_container 先 pack，它會在
+        # 排版當下就把整個剩餘空間吃光，跑馬燈排到後面就完全沒有空間可用。
+        self.marquee = Marquee(
+            self, get_messages=lambda: self.config_mgr.marquee_messages,
+            fg_color=BG_PANEL, corner_radius=10
+        )
+        self.marquee.pack(side="bottom", fill="x", padx=16, pady=(0, 16))
+
         content_container = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=10)
         content_container.pack(fill="both", expand=True, padx=16, pady=(0, 8))
 
@@ -427,13 +480,6 @@ class App(ctk.CTk):
         self.init_history_tab(self.tab_frames["歷史記錄"])
 
         self.switch_tab(self.tab_names[0])
-
-        # 底部跑馬燈
-        self.marquee = Marquee(
-            self, get_messages=lambda: self.config_mgr.marquee_messages,
-            fg_color=BG_PANEL, corner_radius=10
-        )
-        self.marquee.pack(fill="x", padx=16, pady=(0, 16))
 
     def switch_tab(self, name):
         for n, frame in self.tab_frames.items():
@@ -472,6 +518,7 @@ class App(ctk.CTk):
             row2, placeholder_text="https://www.youtube.com/watch?v=...", height=48, font=FONT_ENTRY
         )
         self.entry_url.pack(side="left", padx=(0, 10), fill="x", expand=True)
+        bind_paste(self.entry_url)
 
         self.btn_start = ctk.CTkButton(
             row2, text="啟動雷達", command=self.start_monitoring, font=FONT_BUTTON,
@@ -864,6 +911,7 @@ class App(ctk.CTk):
 
         search_entry = ctk.CTkEntry(search_row, height=42, font=FONT_ENTRY, placeholder_text="搜尋留言內容或留言者...")
         search_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        bind_paste(search_entry)
 
         search_state = {"matches": [], "current": -1}
 
@@ -1007,6 +1055,7 @@ class App(ctk.CTk):
         ctk.CTkLabel(dlg, text="關鍵字 (用逗號分隔):", font=FONT_LABEL).pack(anchor="w", padx=14, pady=(14, 6))
         entry_keywords = ctk.CTkEntry(dlg, height=42, font=FONT_ENTRY, placeholder_text="例: 檳榔,哭文哲")
         entry_keywords.pack(padx=14, pady=4, fill="x")
+        bind_paste(entry_keywords)
         entry_keywords.insert(0, initial_keywords)
 
         ctk.CTkLabel(dlg, text="回覆草稿 (每行一句):", font=FONT_LABEL).pack(anchor="w", padx=14, pady=(10, 6))
