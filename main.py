@@ -62,7 +62,7 @@ class App(ctk.CTk):
         self.title("阿北直播小助手 v1.0 - 真人輔助版")
         self.geometry("1000x700")
         ctk.set_appearance_mode("Dark")
-        ctk.set_default_color_theme("orange")
+        ctk.set_default_color_theme("dark-blue")
 
         self.config_mgr = ConfigManager()
         self.bot_manager = BotThreadManager(self.config_mgr, self.handle_bot_signal)

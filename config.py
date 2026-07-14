@@ -5,8 +5,8 @@ import requests
 from dataclasses import dataclass, asdict
 from typing import List
 
-# GitHub URL Base64編碼（防止易被解讀）- KenH0813/tpp-defender
-REMOTE_SECURITY_URL_B64 = "aHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL0tlbkgwODEzL3RwcC1kZWZlbmRlci9tYWluL3NlY3VyaXR5X3J1bGVzLmpzb24="
+# GitHub URL Base64編碼（防止易被解讀）- ken19800813/tpp-defender
+REMOTE_SECURITY_URL_B64 = "aHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL2tlbjE5ODAwODEzL3RwcC1kZWZlbmRlci9tYWluL3NlY3VyaXR5X3J1bGVzLmpzb24="
 REMOTE_SECURITY_URL = base64.b64decode(REMOTE_SECURITY_URL_B64).decode()
 CACHE_FILE = "security_cache.json"
 VERSION_INFO_FILE = "security_version.json"
