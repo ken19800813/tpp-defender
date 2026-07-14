@@ -31,7 +31,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: TPPchat-windows
-          path: dist/TPPchat.exe
+          path: dist/
+          if-no-files-found: error
 
   build-macos:
     runs-on: macos-latest
@@ -62,9 +63,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: TPPchat-macos
-          path: |
-            dist/TPPchat.app
-            dist/TPPchat.dmg
+          path: dist/
+          if-no-files-found: error
 
   release:
     needs: [build-windows, build-macos]
@@ -77,20 +77,25 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: TPPchat-windows
-          path: ./release
+          path: ./release/windows
 
       - name: Download macOS artifacts
         uses: actions/download-artifact@v4
         with:
           name: TPPchat-macos
-          path: ./release
+          path: ./release/macos
+
+      - name: Prepare files for release
+        run: |
+          mkdir -p ./release/final
+          cp ./release/windows/TPPchat.exe ./release/final/ || echo "Windows exe not found"
+          cp ./release/macos/TPPchat.dmg ./release/final/ || echo "macOS dmg not found"
+          ls -lah ./release/final/
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: |
-            release/TPPchat.exe
-            release/TPPchat.dmg
+          files: ./release/final/*
           draft: false
           prerelease: false
         env:
