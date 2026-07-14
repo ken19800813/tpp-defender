@@ -19,6 +19,10 @@ from bot_engine import LOGS_DIR
 
 AD_POLL_INTERVAL_MS = 60000
 
+# 廣告彈窗圖片固定寬度（配合彈窗內容寬度），高度依圖片比例自動縮放、
+# 不裁切也不設上限——彈窗本身高度會隨圖片+文字內容自動增高。
+AD_IMAGE_WIDTH = 380
+
 ACCENT = "#28c8c8"
 ACCENT_HOVER = "#1fa3a3"
 ACCENT_DIM = "#1c8a8a"
@@ -446,8 +450,8 @@ class AdPopUp(ctk.CTkToplevel):
 
         if image_bytes:
             try:
-                pil_img = Image.open(io.BytesIO(image_bytes))
-                pil_img.thumbnail((380, 260))
+                pil_img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+                pil_img = self._resize_to_fixed_width(pil_img, AD_IMAGE_WIDTH)
                 ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=pil_img.size)
                 ctk.CTkLabel(content, image=ctk_img, text="").pack(pady=(0, 12))
             except Exception:
@@ -474,6 +478,15 @@ class AdPopUp(ctk.CTkToplevel):
             fg_color="#444", hover_color="#555",
             command=self.destroy, height=42, width=100
         ).pack(side="left")
+
+    @staticmethod
+    def _resize_to_fixed_width(pil_img, target_width):
+        """不論原圖尺寸(直圖/橫圖)一律縮放成固定寬度、維持長寬比，高度
+        不裁切也不設上限，讓彈窗依實際圖片比例自動增高。"""
+        w, h = pil_img.size
+        scale = target_width / w
+        new_height = max(1, round(h * scale))
+        return pil_img.resize((target_width, new_height), Image.LANCZOS)
 
     def on_open_link(self):
         if self.link_url:
