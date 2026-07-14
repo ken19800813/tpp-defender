@@ -887,11 +887,11 @@ class App(ctk.CTk):
         frame_buttons.pack(fill="x", padx=8, pady=8)
 
         ctk.CTkButton(frame_buttons, text="新增規則", command=self.add_rule_dialog, font=FONT_BUTTON,
-                       fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a", height=44, width=150).pack(side="left", padx=4)
+                       fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a", height=44).pack(side="left", padx=4, fill="x", expand=True)
         ctk.CTkButton(frame_buttons, text="編輯規則", command=self.edit_rule_dialog, font=FONT_BUTTON,
-                       fg_color="#444", hover_color="#555", height=44, width=150).pack(side="left", padx=4)
+                       fg_color="#444", hover_color="#555", height=44).pack(side="left", padx=4, fill="x", expand=True)
         ctk.CTkButton(frame_buttons, text="刪除規則", command=self.delete_rule_dialog, font=FONT_BUTTON,
-                       fg_color="#444", hover_color="#555", height=44, width=150).pack(side="left", padx=4)
+                       fg_color="#444", hover_color="#555", height=44).pack(side="left", padx=4, fill="x", expand=True)
 
         frame_list = ctk.CTkFrame(tab, fg_color="transparent")
         frame_list.pack(fill="both", expand=True, padx=8, pady=(10, 8))
@@ -1136,8 +1136,10 @@ class App(ctk.CTk):
             text_box = ctk.CTkFrame(row, fg_color="transparent")
             text_box.pack(side="left", fill="x", expand=True, padx=14, pady=12)
 
+            # 標題太長會蓋住右邊的按鈕，截斷到 50 字以內
+            title_display = title if len(title) <= 50 else title[:47] + "..."
             ctk.CTkLabel(
-                text_box, text=title, font=FONT_LABEL_BOLD,
+                text_box, text=title_display, font=FONT_LABEL_BOLD,
                 text_color="#e8fdfd", anchor="w"
             ).pack(anchor="w")
             ctk.CTkLabel(
