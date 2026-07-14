@@ -85,11 +85,23 @@ jobs:
           name: TPPchat-macos
           path: ./release/macos
 
+      - name: Debug - Show downloaded files structure
+        run: |
+          echo "=== Windows artifact structure ==="
+          find ./release/windows -type f
+          echo "=== macOS artifact structure ==="
+          find ./release/macos -type f
+          echo "=== All files ==="
+          ls -lah ./release/
+
       - name: Prepare files for release
         run: |
           mkdir -p ./release/final
-          cp ./release/windows/TPPchat.exe ./release/final/ || echo "Windows exe not found"
-          cp ./release/macos/TPPchat.dmg ./release/final/ || echo "macOS dmg not found"
+          # Find and copy Windows exe
+          find ./release/windows -name "TPPchat.exe" -exec cp {} ./release/final/ \;
+          # Find and copy macOS dmg
+          find ./release/macos -name "TPPchat.dmg" -exec cp {} ./release/final/ \;
+          echo "=== Final release files ==="
           ls -lah ./release/final/
 
       - name: Create Release
