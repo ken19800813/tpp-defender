@@ -1555,8 +1555,27 @@ class App(ctk.CTk):
         self.cloud_pills_text.config(state="disabled")
 
 
+def _remove_quarantine_on_macos():
+    """macOS 第一次打開自簽應用時會被隔離，自動移除隔離屬性"""
+    if sys.platform != "darwin":
+        return
+    try:
+        app_path = os.path.dirname(sys.executable)
+        # 如果是 .app bundle，app_path 會包含 .app 路徑
+        if ".app" in app_path:
+            app_bundle = app_path.split(".app")[0] + ".app"
+            subprocess.run(
+                ["xattr", "-d", "com.apple.quarantine", app_bundle],
+                capture_output=True, timeout=2
+            )
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
     import socket
+
+    _remove_quarantine_on_macos()
 
     # 防止重複啟動：試著佔用一個特定的 port（9876），若失敗表示已有實例運行
     try:
