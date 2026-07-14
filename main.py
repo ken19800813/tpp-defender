@@ -122,26 +122,48 @@ def find_forbidden_word(text, extra_forbidden_words=None):
     return None
 
 
-def bind_paste(entry):
-    """手動接管Ctrl+V/Cmd+V貼上，直接讀系統剪貼簿寫入欄位。
-    使用 pyperclip 確保跨平台穩定性。"""
-    def do_paste(event=None):
+def read_clipboard(widget):
+    """統一的剪貼簿讀取。優先用 Tkinter 原生 clipboard_get()——它不依賴
+    pbpaste/pyperclip，在打包成 .app / .exe 後 PATH 被精簡時仍然可用（這是
+    先前所有貼上途徑同時失效的真正原因：全都經過 pyperclip → pbpaste，
+    一旦環境找不到 pbpaste 就靜默回空）。pyperclip 僅作後備。"""
+    text = ""
+    try:
+        text = widget.clipboard_get()
+    except Exception:
+        text = ""
+    if not text:
         try:
             text = pyperclip.paste()
-            if not text:
-                return "break"
-            # 清空輸入框
-            entry.delete(0, "end")
-            # 貼上文字
-            entry.insert(0, text)
-            return "break"
-        except Exception as e:
-            print(f"貼上失敗: {e}")
-            return "break"
+        except Exception:
+            text = ""
+    return text or ""
 
-    # 綁定快捷鍵（Ctrl+V for Windows/Linux, Cmd+V for Mac）
-    entry.bind("<Control-v>", do_paste)
-    entry.bind("<Command-v>", do_paste)
+
+def bind_paste(entry):
+    """接管 Ctrl+V / Cmd+V 貼上，綁在輸入框本身（於 class 綁定前執行並
+    return 'break'，避免與系統原生貼上重複觸發）。同時綁大小寫與 <<Paste>>
+    虛擬事件，涵蓋 Mac/Windows/Linux 各種鍵位。"""
+    def do_paste(event=None):
+        text = read_clipboard(entry)
+        if not text:
+            # 我們讀不到 → 不要 return 'break'，放行讓系統原生貼上當最後一道
+            return None
+        try:
+            entry.delete("sel.first", "sel.last")  # 有選取就取代
+        except Exception:
+            pass
+        try:
+            entry.insert("insert", text)  # 插在游標處（標準貼上行為）
+        except Exception:
+            try:
+                entry.insert(0, text)
+            except Exception:
+                pass
+        return "break"  # 已貼上，擋掉原生貼上避免重複
+
+    for seq in ("<Control-v>", "<Control-V>", "<Command-v>", "<Command-V>", "<<Paste>>"):
+        entry.bind(seq, do_paste)
     return entry
 
 
@@ -585,17 +607,16 @@ class App(ctk.CTk):
         edit_menu.add_command(label="貼上網址 (Ctrl+V / Cmd+V)", command=self._paste_url)
 
     def _paste_url(self):
-        """從剪貼簿貼上網址到「直播網址」輸入框"""
-        try:
-            url = pyperclip.paste()
-            if hasattr(self, 'entry_url'):
-                self.entry_url.delete(0, "end")
-                self.entry_url.insert(0, url)
-                messagebox.showinfo("成功", f"已貼上：{url[:60]}...")
-            else:
-                messagebox.showwarning("提示", "找不到直播網址輸入框")
-        except Exception as e:
-            messagebox.showerror("貼上失敗", str(e))
+        """從剪貼簿貼上網址到「直播網址」輸入框（選單用）"""
+        if not hasattr(self, 'entry_url'):
+            messagebox.showwarning("提示", "找不到直播網址輸入框")
+            return
+        url = read_clipboard(self.entry_url)
+        if not url:
+            messagebox.showwarning("提示", "剪貼簿是空的，請先複製 YouTube 網址")
+            return
+        self.entry_url.delete(0, "end")
+        self.entry_url.insert(0, url)
 
     def _check_ads(self):
         """定時檢查有沒有新的廣告推播，不管有沒有在監看直播都會執行。
@@ -751,20 +772,8 @@ class App(ctk.CTk):
         )
         self.entry_url.pack(side="left", padx=(0, 10), fill="x", expand=True)
 
-        # 全局快捷鍵綁定（在 root 層級，確保隨時觸發）
-        def paste_global(event=None):
-            try:
-                url = pyperclip.paste()
-                if url:
-                    self.entry_url.delete(0, "end")
-                    self.entry_url.insert(0, url)
-            except:
-                pass
-            return "break"
-
-        # 綁定全局快捷鍵
-        self.bind_all("<Control-v>", paste_global)
-        self.bind_all("<Command-v>", paste_global)
+        # 貼上：用 Tk 原生剪貼簿的統一綁定（不依賴 pbpaste/pyperclip）
+        bind_paste(self.entry_url)
 
         # 右鍵菜單作為備選
         self._create_context_menu(self.entry_url)
