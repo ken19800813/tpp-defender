@@ -229,7 +229,9 @@ class YouTubeLiveTacticalBot:
                 # 建立持久化上下文，登入狀態會跨次啟動保存
                 os.makedirs(BROWSER_PROFILE_DIR, exist_ok=True)
                 context = p.chromium.launch_persistent_context(
-                    BROWSER_PROFILE_DIR, headless=False
+                    BROWSER_PROFILE_DIR,
+                    headless=False,
+                    args=["--disable-blink-features=AutomationControlled"]
                 )
                 self.page = context.pages[0] if context.pages else context.new_page()
                 video_id = video_url.split("v=")[-1].split("&")[0]
