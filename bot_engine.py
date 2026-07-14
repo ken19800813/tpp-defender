@@ -171,35 +171,42 @@ class YouTubeLiveTacticalBot:
         except Exception:
             pass
 
-        self.ui_callback("SYSTEM", "下載中... 0%")
+        self.ui_callback("SYSTEM", "偵測到瀏覽器元件尚未安裝，正在自動下載（僅第一次執行需要，需要網路連線，可能需要 5-15 分鐘，請耐心等候）...")
         try:
             process = subprocess.Popen(
                 [sys.executable, "-m", "playwright", "install", "chromium"],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
             )
 
             last_update = time.time()
-            while process.poll() is None:
-                # 每秒更新一次進度提示
-                if time.time() - last_update > 1:
-                    last_update = time.time()
-                    self.ui_callback("SYSTEM", f"下載中... {int((time.time() % 3) * 33) % 100}%")
-                time.sleep(0.1)
+            output_lines = []
 
-            _, stderr = process.communicate(timeout=10)
+            for line in iter(process.stdout.readline, ''):
+                if line:
+                    output_lines.append(line.strip())
+                    # 每 2 秒更新一次進度，顯示最後一行訊息
+                    if time.time() - last_update > 2:
+                        last_update = time.time()
+                        msg = output_lines[-1] if output_lines else "下載中..."
+                        if len(msg) > 60:
+                            msg = msg[:57] + "..."
+                        self.ui_callback("SYSTEM", f"⬇️  {msg}")
+
+            process.wait(timeout=600)
 
             if process.returncode == 0:
-                self.ui_callback("SYSTEM", "✓ 瀏覽器元件安裝完成，繼續啟動監看。")
+                self.ui_callback("SYSTEM", "✅ 瀏覽器元件安裝完成，繼續啟動監看。")
                 return True
 
-            self.ui_callback("SYSTEM", f"✗ 瀏覽器元件安裝失敗：{stderr[-300:] if stderr else '未知錯誤'}")
+            error_msg = "\n".join(output_lines[-10:]) if output_lines else "未知錯誤"
+            self.ui_callback("SYSTEM", f"❌ 瀏覽器元件安裝失敗：{error_msg[-200:]}")
             return False
         except subprocess.TimeoutExpired:
             process.kill()
-            self.ui_callback("SYSTEM", "✗ 瀏覽器元件安裝逾時，請檢查網路連線後重試。")
+            self.ui_callback("SYSTEM", "❌ 瀏覽器元件安裝逾時（超過 10 分鐘），請檢查網路連線後重試。")
             return False
         except Exception as e:
-            self.ui_callback("SYSTEM", f"✗ 瀏覽器元件安裝失敗：{e}")
+            self.ui_callback("SYSTEM", f"❌ 瀏覽器元件安裝失敗：{str(e)[:100]}")
             return False
 
     def start_monitor(self, video_url: str):
