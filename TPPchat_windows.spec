@@ -1,20 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 # 直播小幫手 Windows 版本 PyInstaller spec 檔
-# 在 Windows 上執行: pyinstaller TPPchat_windows.spec
 
 import os
-import site
-from PyInstaller.utils.hooks import get_module_file_attribute
-
-# 找出 playwright 相關檔案位置
-try:
-    playwright_path = os.path.dirname(get_module_file_attribute('playwright'))
-except:
-    playwright_path = None
 
 datas = []
-if playwright_path:
-    datas.append((os.path.join(playwright_path, '.browsers'), 'playwright/.browsers'))
+# 嘗試包含 playwright browsers，但如果不存在也不會失敗
+try:
+    from PyInstaller.utils.hooks import get_module_file_attribute
+    playwright_path = os.path.dirname(get_module_file_attribute('playwright'))
+    browsers_path = os.path.join(playwright_path, '.browsers')
+    if os.path.exists(browsers_path):
+        datas.append((browsers_path, 'playwright/.browsers'))
+except:
+    pass
 
 a = Analysis(
     ['main.py'],

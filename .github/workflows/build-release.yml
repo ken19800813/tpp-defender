@@ -27,6 +27,10 @@ jobs:
           pip install -r requirements.txt
           pip install PyInstaller
 
+      - name: Install Playwright browsers
+        run: |
+          python -m playwright install chromium
+
       - name: Build Windows EXE
         run: |
           pyinstaller TPPchat_windows.spec
@@ -53,6 +57,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install PyInstaller
+
+      - name: Install Playwright browsers
+        run: |
+          python -m playwright install chromium
 
       - name: Build macOS APP
         run: |
