@@ -100,8 +100,10 @@ def info_icon(parent, text, **pack_kwargs):
     return icon
 
 
-def pagination_bar(parent, on_prev, on_next, **pack_kwargs):
-    """建立一組上一頁/頁碼/下一頁的分頁控制列，回傳(frame, page_label, prev_btn, next_btn)"""
+def pagination_bar(parent, on_prev, on_next, page_size_options=None, on_size_change=None,
+                    default_size=None, **pack_kwargs):
+    """建立一組上一頁/頁碼/下一頁(+可選每頁筆數選單)的分頁控制列
+    回傳(frame, page_label, prev_btn, next_btn, size_menu)"""
     bar = ctk.CTkFrame(parent, fg_color="transparent")
     bar.pack(**pack_kwargs)
 
@@ -120,7 +122,37 @@ def pagination_bar(parent, on_prev, on_next, **pack_kwargs):
     )
     next_btn.pack(side="left", padx=4)
 
-    return bar, page_label, prev_btn, next_btn
+    size_menu = None
+    if page_size_options:
+        ctk.CTkLabel(bar, text="每頁顯示：", font=FONT_LABEL, text_color="#8fb3b3").pack(side="left", padx=(20, 4))
+        size_var = tk.StringVar(value=str(default_size or page_size_options[0]))
+        size_menu = ctk.CTkOptionMenu(
+            bar, values=[str(n) for n in page_size_options], variable=size_var,
+            width=90, height=38, font=FONT_LABEL,
+            fg_color="#444", button_color="#444", button_hover_color="#555",
+            dropdown_fg_color="#1c2626", dropdown_hover_color=ACCENT_DIM,
+            command=lambda v: on_size_change(int(v)) if on_size_change else None
+        )
+        size_menu.pack(side="left", padx=4)
+        ctk.CTkLabel(bar, text="筆", font=FONT_LABEL, text_color="#8fb3b3").pack(side="left")
+
+    return bar, page_label, prev_btn, next_btn, size_menu
+
+
+def copy_icon(parent, get_text, log_callback=None, **pack_kwargs):
+    """建立一個可點擊的複製圖示，點擊時把get_text()回傳的內容整份複製到剪貼簿"""
+    icon = ctk.CTkLabel(parent, text="⧉", font=FONT_ICON, text_color=ACCENT, cursor="hand2")
+
+    def on_click(event=None):
+        text = get_text()
+        pyperclip.copy(text)
+        if log_callback:
+            log_callback("已複製雲端預設反擊建議全文到剪貼簿。")
+
+    icon.bind("<Button-1>", on_click)
+    icon.pack(**pack_kwargs)
+    ToolTip(icon, "點擊複製完整的雲端預設反擊建議清單到剪貼簿")
+    return icon
 
 
 class Marquee(ctk.CTkFrame):
@@ -176,11 +208,13 @@ class Marquee(ctk.CTkFrame):
 
 
 class NotificationPopUp(ctk.CTkToplevel):
-    """置頂警示小彈窗：由真人點擊觸發一鍵複製到剪貼簿，並自動把聊天室瀏覽器帶到最前面"""
-    def __init__(self, parent, author, content, reply, ui_log_callback):
+    """置頂警示小彈窗：使用者看過實際文字後點擊送出，會自動打字進聊天室並直接送出
+    （這一步會真的公開發言，仍保留「點擊前必須先看過完整文字」這道最後把關）"""
+    def __init__(self, parent, author, content, reply, ui_log_callback, on_send=None):
         super().__init__(parent)
         self.reply_text = reply
         self.ui_log_callback = ui_log_callback
+        self.on_send = on_send
 
         self.overrideredirect(True)
         self.attributes("-topmost", True)
@@ -206,18 +240,20 @@ class NotificationPopUp(ctk.CTkToplevel):
         ).pack(pady=6)
 
         self.btn_copy = ctk.CTkButton(
-            self, text=f"複製反擊建議並切到聊天室：{reply[:14]}...",
+            self, text=f"自動送出：{reply[:18]}...",
             font=FONT_BUTTON,
             fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a",
-            command=self.on_click_copy, height=46
+            command=self.on_click_send, height=46
         )
         self.btn_copy.pack(pady=10, padx=14, fill="x")
-        self.bind("<Space>", lambda e: self.on_click_copy())
+        self.bind("<Space>", lambda e: self.on_click_send())
         self.btn_copy.focus_set()
 
-    def on_click_copy(self):
+    def on_click_send(self):
         pyperclip.copy(self.reply_text)
-        self.ui_log_callback("SYSTEM", f"反擊建議已複製到系統剪貼簿：{self.reply_text}")
+        self.ui_log_callback("SYSTEM", f"正在自動送出反擊建議：{self.reply_text}")
+        if self.on_send:
+            self.on_send(self.reply_text)
         self.destroy()
         bring_chat_browser_to_front()
 
@@ -396,6 +432,8 @@ class App(ctk.CTk):
             "顯示聊天室的即時留言。\n"
             "白字＝一般留言；紅字＝被判定為側翼攻擊的留言（並會彈出反擊建議小窗）；\n"
             "灰字＝系統訊息。\n"
+            "小窗按下「自動送出」後，系統會直接打字並送出到聊天室——\n"
+            "送出前你都能在小窗看清楚實際文字，按下去就是真的公開發言，請留意。\n"
             "直播結束或按下停止後，本場完整記錄會自動存到「歷史記錄」頁籤。\n\n"
             "沒看到彈跳視窗？可以點右邊「測試彈跳視窗」按鈕，\n"
             "先確認彈窗機制本身正常運作，再確認聊天室是否真的出現觸發關鍵字。",
@@ -495,11 +533,19 @@ class App(ctk.CTk):
         self._rules_by_iid = {}
         self.rules_tree.bind("<Double-1>", self._on_rule_row_double_click)
 
-        _, self.rules_page_label, self.rules_prev_btn, self.rules_next_btn = pagination_bar(
+        _, self.rules_page_label, self.rules_prev_btn, self.rules_next_btn, _ = pagination_bar(
             frame_list, self._rules_prev_page, self._rules_next_page,
+            page_size_options=[10, 20, 50], on_size_change=self._rules_change_page_size,
+            default_size=self._rules_page_size,
             fill="x", pady=(8, 0)
         )
 
+        self.refresh_rules_display()
+
+    def _rules_change_page_size(self, size):
+        self._rules_page_size = size
+        self._rules_page = 0
+        self.rules_tree.configure(height=size)
         self.refresh_rules_display()
 
     def _rules_prev_page(self):
@@ -554,6 +600,10 @@ class App(ctk.CTk):
 
         cloud_header = ctk.CTkFrame(tab, fg_color="transparent")
         cloud_header.pack(fill="x", padx=8, pady=(10, 4))
+        copy_icon(
+            cloud_header, get_text=lambda: "\n".join(self.config_mgr.poison_pill_base),
+            log_callback=self.append_log_system, side="left", padx=(0, 6)
+        )
         ctk.CTkLabel(
             cloud_header, text="雲端預設反擊建議（唯讀預覽）",
             font=FONT_LABEL_BOLD, text_color="#888"
@@ -603,11 +653,18 @@ class App(ctk.CTk):
         )
         self.history_scroll.pack(fill="both", expand=True, padx=8, pady=(6, 8))
 
-        _, self.history_page_label, self.history_prev_btn, self.history_next_btn = pagination_bar(
+        _, self.history_page_label, self.history_prev_btn, self.history_next_btn, _ = pagination_bar(
             tab, self._history_prev_page, self._history_next_page,
+            page_size_options=[6, 12, 24], on_size_change=self._history_change_page_size,
+            default_size=self._history_page_size,
             fill="x", padx=8, pady=(0, 12)
         )
 
+        self.refresh_history_list()
+
+    def _history_change_page_size(self, size):
+        self._history_page_size = size
+        self._history_page = 0
         self.refresh_history_list()
 
     def _history_prev_page(self):
@@ -835,11 +892,18 @@ class App(ctk.CTk):
     def handle_bot_signal(self, msg_type, data):
         if msg_type == "ALERT":
             self.append_log_highlight(f"[側翼攻擊] {data['author']}: {data['content']}")
-            NotificationPopUp(self, data['author'], data['content'], data['reply'], self.handle_bot_signal)
+            NotificationPopUp(
+                self, data['author'], data['content'], data['reply'],
+                self.handle_bot_signal, on_send=self.request_auto_send
+            )
         elif msg_type == "NORMAL":
             self.append_log_normal(f"{data['author']}: {data['content']}")
         elif msg_type == "SYSTEM":
             self.append_log_system(data)
+
+    def request_auto_send(self, text):
+        """把使用者確認過的回覆文字交給bot背景執行緒自動打字送出聊天室"""
+        self.bot_manager.request_send(text)
 
     def append_log(self, text, tag="NORMAL"):
         self.log_text.config(state="normal")

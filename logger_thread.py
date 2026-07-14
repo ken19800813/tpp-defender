@@ -32,3 +32,9 @@ class BotThreadManager:
     def is_running(self) -> bool:
         """檢查機器人是否正在運行"""
         return self.bot is not None and self.bot.is_running
+
+    def request_send(self, text: str):
+        """從主UI執行緒請求自動送出一則回覆，實際打字動作會在bot自己的
+        背景執行緒裡執行(Playwright的頁面物件不能跨執行緒直接呼叫)"""
+        if self.bot and self.bot.is_running:
+            self.bot.queue_send(text)

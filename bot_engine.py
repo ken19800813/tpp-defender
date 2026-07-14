@@ -3,12 +3,20 @@ import random
 import json
 import os
 import re
+import queue
 import requests
 from datetime import datetime
 from playwright.sync_api import sync_playwright
 
 LOGS_DIR = "logs"
 BROWSER_PROFILE_DIR = "browser_profile"
+
+# YouTube 直播聊天室輸入框的常見選擇器，隨頁面版本可能略有差異，依序嘗試
+CHAT_INPUT_SELECTORS = [
+    "yt-live-chat-message-input-renderer #input",
+    "div#input.yt-live-chat-text-input-field-renderer",
+    "#input.yt-live-chat-text-input-field-renderer",
+]
 
 
 class YouTubeLiveTacticalBot:
@@ -18,6 +26,34 @@ class YouTubeLiveTacticalBot:
         self.is_running = False
         self.page = None
         self.session_log = None
+        self.send_queue = queue.Queue()
+
+    def queue_send(self, text: str):
+        """從其他執行緒(主UI執行緒)排入一則要自動送出的回覆文字。
+        Playwright的page物件只能在建立它的執行緒(本bot的背景執行緒)操作，
+        所以用queue把指令帶進start_monitor()的迴圈裡執行，而不是直接呼叫。"""
+        self.send_queue.put(text)
+
+    def _send_chat_message(self, text: str):
+        """自動把文字打進YouTube直播聊天室輸入框並送出。
+        這一步會真的公開發言，務必只在使用者已在彈窗親眼看過文字內容、
+        主動點擊送出後才呼叫，不做任何無人審核的全自動貼文。"""
+        try:
+            input_box = None
+            for selector in CHAT_INPUT_SELECTORS:
+                input_box = self.page.query_selector(selector)
+                if input_box:
+                    break
+            if not input_box:
+                self.ui_callback("SYSTEM", "自動發送失敗：找不到聊天室輸入框，請手動貼上剪貼簿內容。")
+                return
+
+            input_box.click()
+            input_box.type(text)
+            self.page.keyboard.press("Enter")
+            self.ui_callback("SYSTEM", f"已自動送出回覆：{text}")
+        except Exception as e:
+            self.ui_callback("SYSTEM", f"自動發送失敗：{e}，請手動貼上剪貼簿內容。")
 
     def check_channel_lock(self, video_url: str) -> bool:
         """透過 YouTube 公開 OEmbed API 檢查該直播頻道是否屬於硬性鎖定黑名單
@@ -142,6 +178,9 @@ class YouTubeLiveTacticalBot:
 
                 while self.is_running:
                     try:
+                        while not self.send_queue.empty():
+                            self._send_chat_message(self.send_queue.get())
+
                         messages = self.page.query_selector_all("yt-live-chat-text-message-renderer")
                         for msg in messages:
                             msg_id = msg.get_attribute("id")
