@@ -1,0 +1,34 @@
+import threading
+import time
+from bot_engine import YouTubeLiveTacticalBot
+
+
+class BotThreadManager:
+    """背景多執行緒調度，防止 UI 視窗凍結"""
+    def __init__(self, config_manager, ui_log_callback):
+        self.config = config_manager
+        self.ui_log_callback = ui_log_callback
+        self.bot = None
+        self.thread = None
+
+    def start(self, url: str):
+        """在背景執行緒啟動機器人"""
+        if self.thread and self.thread.is_alive():
+            self.ui_log_callback("SYSTEM", "⚠️ 雷達已在運行中")
+            return
+
+        self.bot = YouTubeLiveTacticalBot(self.config, self.ui_log_callback)
+        self.thread = threading.Thread(target=self.bot.start_monitor, args=(url,), daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        """停止機器人"""
+        if self.bot:
+            self.bot.stop()
+        self.ui_log_callback("SYSTEM", "系統：正在中斷監聽核心...")
+        if self.thread:
+            self.thread.join(timeout=2)
+
+    def is_running(self) -> bool:
+        """檢查機器人是否正在運行"""
+        return self.bot is not None and self.bot.is_running
