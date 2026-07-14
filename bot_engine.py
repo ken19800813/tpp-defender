@@ -163,58 +163,11 @@ class YouTubeLiveTacticalBot:
         except Exception as e:
             self.ui_callback("SYSTEM", f"記錄存檔失敗：{str(e)}")
 
-    def _ensure_chromium_installed(self, p) -> bool:
-        """確認 Playwright 的 Chromium 瀏覽器元件已安裝。使用者完全不需要
-        知道「Chromium」或「Playwright」這些名詞——全新電腦第一次啟動監看時，
-        這裡會自動背景下載，下載期間會透過進度條告知使用者。"""
-        try:
-            browser = p.chromium.launch(headless=True)
-            browser.close()
-            return True
-        except Exception:
-            pass
-
-        self.ui_callback("SYSTEM", "偵測到瀏覽器元件尚未安裝，正在自動下載（僅第一次執行需要，需要網路連線，可能需要 5-15 分鐘，請耐心等候）...")
-        try:
-            process = subprocess.Popen(
-                [sys.executable, "-m", "playwright", "install", "chromium"],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
-            )
-
-            last_update = time.time()
-            output_lines = []
-
-            for line in iter(process.stdout.readline, ''):
-                if line:
-                    output_lines.append(line.strip())
-                    # 每 2 秒更新一次進度，顯示最後一行訊息
-                    if time.time() - last_update > 2:
-                        last_update = time.time()
-                        msg = output_lines[-1] if output_lines else "下載中..."
-                        if len(msg) > 60:
-                            msg = msg[:57] + "..."
-                        self.ui_callback("SYSTEM", f"⬇️  {msg}")
-
-            process.wait(timeout=600)
-
-            if process.returncode == 0:
-                self.ui_callback("SYSTEM", "✅ 瀏覽器元件安裝完成，繼續啟動監看。")
-                return True
-
-            error_msg = "\n".join(output_lines[-10:]) if output_lines else "未知錯誤"
-            self.ui_callback("SYSTEM", f"❌ 瀏覽器元件安裝失敗：{error_msg[-200:]}")
-            return False
-        except subprocess.TimeoutExpired:
-            process.kill()
-            self.ui_callback("SYSTEM", "❌ 瀏覽器元件安裝逾時（超過 10 分鐘），請檢查網路連線後重試。")
-            return False
-        except Exception as e:
-            self.ui_callback("SYSTEM", f"❌ 瀏覽器元件安裝失敗：{str(e)[:100]}")
-            return False
-
     def _find_system_chrome(self):
         """尋找系統已安裝的『真 Google Chrome』（不是 Chromium）。
-        用真 Chrome 才能通過 Google 的『受支援瀏覽器』檢查。"""
+        用真 Chrome 才能通過 Google 的『受支援瀏覽器』檢查。
+        也一併搜尋 Playwright 透過 `playwright install chrome` 安裝的
+        Google Chrome（放在使用者的 ms-playwright 快取內）。"""
         if sys.platform == "win32":
             chrome_paths = [
                 r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -228,6 +181,7 @@ class YouTubeLiveTacticalBot:
             chrome_paths = [
                 "/usr/bin/google-chrome",
                 "/usr/bin/google-chrome-stable",
+                "/opt/google/chrome/chrome",
             ]
 
         for path in chrome_paths:
@@ -235,8 +189,51 @@ class YouTubeLiveTacticalBot:
                 return path
         return None
 
+    def _ensure_chrome_installed(self) -> bool:
+        """偵測到使用者沒裝 Google Chrome 時，用 Playwright 幫他自動下載安裝
+        『真的 Google Chrome』（不是 Chromium）。使用者完全不需要懂技術名詞，
+        下載期間透過進度訊息告知。安裝完成後再用 _find_system_chrome() 找路徑。"""
+        self.ui_callback("SYSTEM", "偵測到未安裝 Google Chrome，正在自動下載安裝（僅第一次需要，需網路連線，約 3-10 分鐘，請耐心等候）...")
+        try:
+            process = subprocess.Popen(
+                [sys.executable, "-m", "playwright", "install", "chrome"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+            )
+
+            last_update = time.time()
+            output_lines = []
+
+            for line in iter(process.stdout.readline, ''):
+                if line:
+                    output_lines.append(line.strip())
+                    if time.time() - last_update > 2:
+                        last_update = time.time()
+                        msg = output_lines[-1] if output_lines else "下載中..."
+                        if len(msg) > 60:
+                            msg = msg[:57] + "..."
+                        self.ui_callback("SYSTEM", f"⬇️  {msg}")
+
+            process.wait(timeout=900)
+
+            if process.returncode == 0:
+                self.ui_callback("SYSTEM", "✅ Google Chrome 安裝完成，繼續啟動監看。")
+                return True
+
+            error_msg = "\n".join(output_lines[-10:]) if output_lines else "未知錯誤"
+            self.ui_callback("SYSTEM", f"❌ Chrome 安裝失敗：{error_msg[-200:]}")
+            self.ui_callback("SYSTEM", "請手動前往 https://www.google.com/chrome 下載安裝 Chrome 後重試。")
+            return False
+        except subprocess.TimeoutExpired:
+            process.kill()
+            self.ui_callback("SYSTEM", "❌ Chrome 安裝逾時（超過 15 分鐘），請檢查網路連線後重試。")
+            return False
+        except Exception as e:
+            self.ui_callback("SYSTEM", f"❌ Chrome 安裝失敗：{str(e)[:100]}")
+            self.ui_callback("SYSTEM", "請手動前往 https://www.google.com/chrome 下載安裝 Chrome 後重試。")
+            return False
+
     def start_monitor(self, video_url: str):
-        """啟動唯讀雷達監聽"""
+        """啟動唯讀雷達監聽（只用真 Google Chrome）"""
         if self.check_channel_lock(video_url):
             self.ui_callback("SYSTEM", "安全機制判定：本工具不支援此非授權親綠陣營頻道運作！")
             return
@@ -246,38 +243,40 @@ class YouTubeLiveTacticalBot:
             with sync_playwright() as p:
                 os.makedirs(BROWSER_PROFILE_DIR, exist_ok=True)
 
-                # === 反自動化偵測的關鍵三要素（缺一不可）===
-                # 1. ignore_default_args=["--enable-automation"]：
-                #    移除 Playwright 預設加的自動化開關，這是頂端「受自動測試
-                #    軟體控制」橫幅與 Google 登入拒絕的主因。
-                # 2. --disable-blink-features=AutomationControlled：
-                #    隱藏 navigator.webdriver 屬性。
-                # 3. 用真 Google Chrome（非 Chromium）：
-                #    通過 Google 的「受支援瀏覽器」檢查。
-                anti_detect_args = ["--disable-blink-features=AutomationControlled"]
-                ignore_args = ["--enable-automation"]
-
+                # 只用真 Google Chrome。沒裝就自動下載安裝，裝完再找一次路徑。
                 chrome_path = self._find_system_chrome()
-                if chrome_path:
+                if not chrome_path:
+                    if not self._ensure_chrome_installed():
+                        self.ui_callback("SYSTEM", "無法啟動：缺少 Google Chrome。")
+                        return
+                    chrome_path = self._find_system_chrome()
+
+                if not chrome_path:
+                    # 用 Playwright channel 當最後保險（playwright install chrome 後可用）
+                    self.ui_callback("SYSTEM", "✓ 使用 Playwright 安裝的 Google Chrome（首次請在視窗內登入 YouTube 一次）")
+                    context = p.chromium.launch_persistent_context(
+                        BROWSER_PROFILE_DIR,
+                        channel="chrome",
+                        headless=False,
+                        ignore_default_args=["--enable-automation"],
+                        args=["--disable-blink-features=AutomationControlled"],
+                    )
+                else:
+                    # === 反自動化偵測的關鍵三要素（缺一不可）===
+                    # 1. ignore_default_args=["--enable-automation"]：移除 Playwright
+                    #    預設加的自動化開關（頂端「受自動測試軟體控制」橫幅與
+                    #    Google 登入拒絕的主因）。
+                    # 2. --disable-blink-features=AutomationControlled：隱藏
+                    #    navigator.webdriver 屬性。
+                    # 3. 用真 Google Chrome（非 Chromium）：通過 Google 的
+                    #    「受支援瀏覽器」檢查。
                     self.ui_callback("SYSTEM", "✓ 使用系統 Google Chrome（首次請在視窗內登入 YouTube 一次）")
                     context = p.chromium.launch_persistent_context(
                         BROWSER_PROFILE_DIR,
                         executable_path=chrome_path,
                         headless=False,
-                        ignore_default_args=ignore_args,
-                        args=anti_detect_args,
-                    )
-                else:
-                    # 找不到真 Chrome，退回下載的 Chromium（Google 登入成功率較低）
-                    if not self._ensure_chromium_installed(p):
-                        self.ui_callback("SYSTEM", "無法啟動：缺少瀏覽器元件，請確認網路連線後重試。")
-                        return
-                    self.ui_callback("SYSTEM", "⚠ 未偵測到 Google Chrome，改用 Chromium（Google 登入可能受限，建議安裝 Chrome）")
-                    context = p.chromium.launch_persistent_context(
-                        BROWSER_PROFILE_DIR,
-                        headless=False,
-                        ignore_default_args=ignore_args,
-                        args=anti_detect_args,
+                        ignore_default_args=["--enable-automation"],
+                        args=["--disable-blink-features=AutomationControlled"],
                     )
 
                 self.page = context.pages[0] if context.pages else context.new_page()
