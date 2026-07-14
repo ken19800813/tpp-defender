@@ -221,14 +221,41 @@ class YouTubeLiveTacticalBot:
                 )
                 self.page.goto(f"https://www.youtube.com/live_chat?v={video_id}")
 
-                try:
-                    self.page.wait_for_selector("yt-live-chat-text-message-renderer", timeout=20000)
-                except Exception:
-                    self.ui_callback("SYSTEM", "錯誤：無法加載聊天室，請確認網路連線。")
+                # 等待「聊天室容器」出現即可，不等「至少一則留言」——
+                # 直播還沒開始（例如預告網址、晚上八點才開播）時聊天室
+                # 頁面本身已經載入，只是還沒有人留言，用訊息當判斷標準
+                # 會誤判成連線失敗。改成耐心等待聊天室容器出現，讓使用者
+                # 可以提前貼上網址、開播後自動接手監看，不用一直手動重試。
+                chat_ready = False
+                wait_attempt = 0
+                while self.is_running and not chat_ready:
+                    wait_attempt += 1
+                    try:
+                        self.page.wait_for_selector("yt-live-chat-renderer", timeout=15000)
+                        chat_ready = True
+                    except Exception:
+                        if not self.is_running:
+                            break
+                        self.ui_callback(
+                            "SYSTEM",
+                            f"尚未偵測到聊天室（可能直播尚未開始），持續等待中...（第{wait_attempt}次嘗試）"
+                        )
+                        if wait_attempt % 4 == 0:
+                            try:
+                                self.page.reload()
+                            except Exception:
+                                pass
+
+                if not self.is_running:
                     context.close()
                     return
 
-                self.ui_callback("SYSTEM", "雷達運作中... 靜態過濾已就緒。")
+                if not chat_ready:
+                    self.ui_callback("SYSTEM", "錯誤：無法加載聊天室，請確認網址正確。")
+                    context.close()
+                    return
+
+                self.ui_callback("SYSTEM", "雷達運作中... 靜態過濾已就緒。若直播尚未開始，會持續監看至開播。")
                 processed_msg_ids = set()
 
                 while self.is_running:
