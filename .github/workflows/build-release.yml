@@ -105,6 +105,8 @@ jobs:
           find ./release/windows -name "TPPchat.exe" -exec cp {} ./release/final/ \;
           # Find and copy macOS dmg
           find ./release/macos -name "TPPchat.dmg" -exec cp {} ./release/final/ \;
+          # Copy installation guide
+          cp 安裝說明.txt ./release/final/ 2>/dev/null || echo "Installation guide not found"
           echo "=== Final release files ==="
           ls -lah ./release/final/
 
