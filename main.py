@@ -1525,6 +1525,13 @@ class App(ctk.CTk):
 
         ctk.CTkLabel(dlg, text="選擇要刪除的自訂規則：", font=FONT_LABEL).pack(anchor="w", padx=14, pady=12)
 
+        # 關閉按鈕先用 side="bottom" 卡位，避免下面 scroll 的 expand=True
+        # 吃光所有空間、把按鈕擠出視窗外看不見（跟規則列表分頁列被擠掉是同一個坑）。
+        ctk.CTkButton(
+            dlg, text="關閉", command=dlg.destroy, font=FONT_BUTTON, height=40,
+            fg_color="#444", hover_color="#555"
+        ).pack(side="bottom", pady=(0, 14))
+
         scroll = ctk.CTkScrollableFrame(
             dlg, fg_color="#0f1515",
             scrollbar_fg_color=SCROLL_TROUGH, scrollbar_button_color=SCROLL_BG,
