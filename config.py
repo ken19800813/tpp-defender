@@ -11,9 +11,12 @@ REMOTE_SECURITY_URL = base64.b64decode(REMOTE_SECURITY_URL_B64).decode()
 CACHE_FILE = "security_cache.json"
 VERSION_INFO_FILE = "security_version.json"
 
-# 跑馬燈改由 LINEBOT 後台(/ken_admin/marquee)統一編輯與更新，
-# GitHub security_rules.json 的 marquee_messages 欄位僅作為連不到時的備援
-MARQUEE_API_URL = "https://line-news-0p7m.onrender.com/api/social/marquee"
+# 黑名單頻道、防禦關鍵字規則、跑馬燈文字改由 LINEBOT 後台的
+# 「直播小幫手」獨立模組統一編輯與更新(/ken_admin/livestream/*)，
+# GitHub security_rules.json 只再保留 forbidden_attack_words 跟
+# poison_pill_replies(反擊建議)兩項。
+LIVESTREAM_CONFIG_API_URL = "https://line-news-0p7m.onrender.com/api/livestream/config"
+LIVESTREAM_CACHE_FILE = "livestream_cache.json"
 
 
 @dataclass
@@ -43,7 +46,7 @@ class ConfigManager:
         self.marquee_messages: List[str] = []
 
         self.fetch_remote_rules()
-        self.fetch_marquee_messages()
+        self.fetch_livestream_config()
         self.load()
         self._rebuild_rules()
 
@@ -70,10 +73,7 @@ class ConfigManager:
             elif res.status_code == 200:
                 data = res.json()
                 self.forbidden_words = data.get("forbidden_attack_words", [])
-                self.default_rules_data = data.get("default_defense_rules", [])
-                self.locked_channels = data.get("locked_channels", [])
                 self.poison_pill_base = data.get("poison_pill_replies", [])
-                self.marquee_messages = data.get("marquee_messages", [])
 
                 with open(CACHE_FILE, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=4)
@@ -91,31 +91,44 @@ class ConfigManager:
 
         self._load_from_local_cache()
 
-    def fetch_marquee_messages(self):
-        """跑馬燈文字改由 LINEBOT 後台(/ken_admin/marquee)統一編輯與更新。
-        self.marquee_messages 此時已經有 fetch_remote_rules() 從 GitHub
-        security_rules.json 讀到的舊值(當備援)，這裡連線成功才覆蓋過去；
-        連不到的話就沿用備援值，不會讓跑馬燈整個空白。"""
+    def fetch_livestream_config(self):
+        """黑名單頻道、防禦關鍵字規則、跑馬燈文字統一從 LINEBOT 後台的
+        「直播小幫手」模組同步。連線失敗時改用本機快取，避免整個空白。"""
         try:
-            res = requests.get(MARQUEE_API_URL, timeout=4)
+            res = requests.get(LIVESTREAM_CONFIG_API_URL, timeout=4)
             if res.status_code == 200:
                 data = res.json()
                 if data.get("success"):
-                    self.marquee_messages = data.get("messages", [])
+                    self.locked_channels = data.get("locked_channels", [])
+                    self.default_rules_data = data.get("default_defense_rules", [])
+                    self.marquee_messages = data.get("marquee_messages", [])
+                    with open(LIVESTREAM_CACHE_FILE, "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=4)
+                    return
         except Exception:
             pass
 
+        self._load_livestream_from_local_cache()
+
+    def _load_livestream_from_local_cache(self):
+        if os.path.exists(LIVESTREAM_CACHE_FILE):
+            try:
+                with open(LIVESTREAM_CACHE_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.locked_channels = data.get("locked_channels", [])
+                    self.default_rules_data = data.get("default_defense_rules", [])
+                    self.marquee_messages = data.get("marquee_messages", [])
+            except Exception:
+                pass
+
     def _load_from_local_cache(self):
-        """從本機快取載入規則"""
+        """從本機快取載入 GitHub 端規則（forbidden_attack_words / poison_pill_replies）"""
         if os.path.exists(CACHE_FILE):
             try:
                 with open(CACHE_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.forbidden_words = data.get("forbidden_attack_words", [])
-                    self.default_rules_data = data.get("default_defense_rules", [])
-                    self.locked_channels = data.get("locked_channels", [])
                     self.poison_pill_base = data.get("poison_pill_replies", [])
-                    self.marquee_messages = data.get("marquee_messages", [])
             except Exception:
                 pass
 
