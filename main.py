@@ -124,19 +124,29 @@ def find_forbidden_word(text, extra_forbidden_words=None):
 
 def bind_paste(entry):
     """手動接管Ctrl+V/Cmd+V貼上，直接讀系統剪貼簿寫入欄位。
-    CTkEntry在某些平台上第一次貼上會失敗、要貼過一次才穩定，
-    直接接管可以避免依賴Tk內建、時機不穩的貼上虛擬事件。"""
+    使用 pyperclip 確保跨平台穩定性。"""
     def do_paste(event=None):
         try:
-            text = entry.clipboard_get()
+            text = pyperclip.paste()
+            if not text:
+                return "break"
         except Exception:
             return "break"
         try:
-            if entry.selection_present():
-                entry.delete("sel.first", "sel.last")
+            # 清除已選取的文字
+            entry.delete("0.0", "end") if entry.cget("state") != "disabled" else None
         except Exception:
-            pass
-        entry.insert("insert", text)
+            try:
+                entry.delete(0, "end")
+            except Exception:
+                pass
+        try:
+            entry.insert("0.0", text) if hasattr(entry, 'delete') and "0.0" else entry.insert(0, text)
+        except Exception:
+            try:
+                entry.insert(0, text)
+            except Exception:
+                pass
         return "break"
 
     entry.bind("<Control-v>", do_paste)
@@ -574,9 +584,9 @@ class App(ctk.CTk):
         """從剪貼簿貼上網址到「直播網址」輸入框"""
         try:
             url = pyperclip.paste()
-            if hasattr(self, 'stream_url_entry'):
-                self.stream_url_entry.delete(0, "end")
-                self.stream_url_entry.insert(0, url)
+            if hasattr(self, 'entry_url'):
+                self.entry_url.delete(0, "end")
+                self.entry_url.insert(0, url)
                 messagebox.showinfo("成功", f"已貼上：{url[:60]}...")
             else:
                 messagebox.showwarning("提示", "找不到直播網址輸入框")
