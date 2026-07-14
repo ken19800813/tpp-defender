@@ -213,9 +213,8 @@ class YouTubeLiveTacticalBot:
             return False
 
     def _find_system_chrome(self):
-        """尋找系統已安裝的 Chrome 瀏覽器"""
-        chrome_paths = []
-
+        """尋找系統已安裝的『真 Google Chrome』（不是 Chromium）。
+        用真 Chrome 才能通過 Google 的『受支援瀏覽器』檢查。"""
         if sys.platform == "win32":
             chrome_paths = [
                 r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -225,30 +224,15 @@ class YouTubeLiveTacticalBot:
             chrome_paths = [
                 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
             ]
-        elif sys.platform == "linux":
+        else:  # linux
             chrome_paths = [
                 "/usr/bin/google-chrome",
-                "/usr/bin/chromium",
+                "/usr/bin/google-chrome-stable",
             ]
 
         for path in chrome_paths:
             if os.path.exists(path):
                 return path
-        return None
-
-    def _get_system_chrome_profile(self):
-        """取得系統 Chrome 的真實設定檔路徑（已登入帳號）"""
-        home = str(Path.home())
-
-        if sys.platform == "darwin":
-            profile = os.path.join(home, "Library/Application Support/Google/Chrome/Default")
-        elif sys.platform == "win32":
-            profile = os.path.join(home, "AppData\\Local\\Google\\Chrome\\User Data\\Default")
-        else:  # linux
-            profile = os.path.join(home, ".config/google-chrome/Default")
-
-        if os.path.exists(profile):
-            return profile
         return None
 
     def start_monitor(self, video_url: str):
@@ -260,40 +244,43 @@ class YouTubeLiveTacticalBot:
         self.is_running = True
         try:
             with sync_playwright() as p:
-                # 優先用系統已安裝的 Chrome + 其真實設定檔（已登入）
+                os.makedirs(BROWSER_PROFILE_DIR, exist_ok=True)
+
+                # === 反自動化偵測的關鍵三要素（缺一不可）===
+                # 1. ignore_default_args=["--enable-automation"]：
+                #    移除 Playwright 預設加的自動化開關，這是頂端「受自動測試
+                #    軟體控制」橫幅與 Google 登入拒絕的主因。
+                # 2. --disable-blink-features=AutomationControlled：
+                #    隱藏 navigator.webdriver 屬性。
+                # 3. 用真 Google Chrome（非 Chromium）：
+                #    通過 Google 的「受支援瀏覽器」檢查。
+                anti_detect_args = ["--disable-blink-features=AutomationControlled"]
+                ignore_args = ["--enable-automation"]
+
                 chrome_path = self._find_system_chrome()
                 if chrome_path:
-                    self.ui_callback("SYSTEM", "✓ 偵測到系統 Chrome，使用已登入帳號。")
-                    chrome_profile = self._get_system_chrome_profile()
-                    if chrome_profile:
-                        context = p.chromium.launch_persistent_context(
-                            chrome_profile,
-                            executable_path=chrome_path,
-                            headless=False
-                        )
-                        self.page = context.pages[0] if context.pages else context.new_page()
-                    else:
-                        self.ui_callback("SYSTEM", "找不到 Chrome 設定檔，改用應用程式的隔離設定檔。")
-                        os.makedirs(BROWSER_PROFILE_DIR, exist_ok=True)
-                        context = p.chromium.launch_persistent_context(
-                            BROWSER_PROFILE_DIR,
-                            executable_path=chrome_path,
-                            headless=False
-                        )
-                        self.page = context.pages[0] if context.pages else context.new_page()
+                    self.ui_callback("SYSTEM", "✓ 使用系統 Google Chrome（首次請在視窗內登入 YouTube 一次）")
+                    context = p.chromium.launch_persistent_context(
+                        BROWSER_PROFILE_DIR,
+                        executable_path=chrome_path,
+                        headless=False,
+                        ignore_default_args=ignore_args,
+                        args=anti_detect_args,
+                    )
                 else:
-                    # 找不到 Chrome，自動下載 Chromium
+                    # 找不到真 Chrome，退回下載的 Chromium（Google 登入成功率較低）
                     if not self._ensure_chromium_installed(p):
                         self.ui_callback("SYSTEM", "無法啟動：缺少瀏覽器元件，請確認網路連線後重試。")
                         return
-
-                    self.ui_callback("SYSTEM", "系統未安裝 Chrome，改用 Chromium。")
-                    os.makedirs(BROWSER_PROFILE_DIR, exist_ok=True)
+                    self.ui_callback("SYSTEM", "⚠ 未偵測到 Google Chrome，改用 Chromium（Google 登入可能受限，建議安裝 Chrome）")
                     context = p.chromium.launch_persistent_context(
                         BROWSER_PROFILE_DIR,
-                        headless=False
+                        headless=False,
+                        ignore_default_args=ignore_args,
+                        args=anti_detect_args,
                     )
-                    self.page = context.pages[0] if context.pages else context.new_page()
+
+                self.page = context.pages[0] if context.pages else context.new_page()
                 video_id = video_url.split("v=")[-1].split("&")[0]
 
                 title = self._init_session_log(video_url, video_id)
