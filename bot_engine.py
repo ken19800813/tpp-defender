@@ -26,6 +26,23 @@ BROWSER_PROFILE_DIR = str(APP_DATA_DIR / "browser_profile")
 # 之間至少要間隔這麼多秒，嚴禁被拿來洗版聊天室。
 SEND_COOLDOWN_SECONDS = 10
 
+
+def extract_video_id(video_url: str) -> str:
+    """從各種 YouTube 網址格式中取出 11 碼影片 ID。
+    之前只用 split("v=") 抓 watch?v= 格式，遇到沒有 v= 參數的
+    youtube.com/live/VIDEO_ID 這種格式時，會把整串網址誤判成 ID，
+    導致組出來的聊天室網址完全錯誤（Windows 使用者回報的卡住問題根因）。
+    支援：watch?v=ID、youtu.be/ID、live/ID、shorts/ID、embed/ID。"""
+    video_url = video_url.strip()
+    match = re.search(r"[?&]v=([A-Za-z0-9_-]{11})", video_url)
+    if match:
+        return match.group(1)
+    match = re.search(r"(?:youtu\.be/|/live/|/shorts/|/embed/)([A-Za-z0-9_-]{11})", video_url)
+    if match:
+        return match.group(1)
+    # 最後保險：直接拿掉查詢字串後的最後一段路徑
+    return video_url.split("?")[0].rstrip("/").split("/")[-1]
+
 # YouTube 直播聊天室輸入框的常見選擇器，隨頁面版本可能略有差異，依序嘗試
 CHAT_INPUT_SELECTORS = [
     "yt-live-chat-message-input-renderer #input",
@@ -93,7 +110,7 @@ class YouTubeLiveTacticalBot:
         """透過 YouTube 公開 OEmbed API 檢查該直播頻道是否屬於硬性鎖定黑名單
         支援 channel_id (UC...) 與 handle (@xxx) 雙重比對"""
         try:
-            video_id = video_url.split("v=")[-1].split("&")[0]
+            video_id = extract_video_id(video_url)
             oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
             res = requests.get(oembed_url, timeout=4)
             if res.status_code == 200:
@@ -330,7 +347,7 @@ class YouTubeLiveTacticalBot:
 
                 # 一律開新分頁，不霸佔使用者現有分頁（避免把他正在看的頁面導走）
                 self.page = context.new_page()
-                video_id = video_url.split("v=")[-1].split("&")[0]
+                video_id = extract_video_id(video_url)
 
                 title = self._init_session_log(video_url, video_id)
                 self.ui_callback("SYSTEM", f"系統：正在部署唯讀防禦雷達... 節目：{title}")
