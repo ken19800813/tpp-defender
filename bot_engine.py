@@ -394,6 +394,12 @@ class YouTubeLiveTacticalBot:
 
                 self.ui_callback("SYSTEM", "雷達運作中... 靜態過濾已就緒。若直播尚未開始，會持續監看至開播。")
                 processed_msg_ids = set()
+                # YouTube 聊天室的 DOM 節點在捲動/虛擬化重新渲染時，同一則留言
+                # 有時會被拿到不同的 id，導致只靠 id 去重會讓同一則訊息（尤其是
+                # 機器人自己剛送出、馬上又被讀回來的那則）被當成新留言重複處理。
+                # 用 (作者, 內容) 加短時間窗口再做一層保險去重。
+                recent_content_seen = {}
+                CONTENT_DEDUP_WINDOW = 6.0
 
                 while self.is_running:
                     try:
@@ -448,6 +454,19 @@ class YouTubeLiveTacticalBot:
                             author = author_el.inner_text()
                             content = content_el.inner_text()
 
+                            content_key = (author, content)
+                            now = time.time()
+                            last_seen = recent_content_seen.get(content_key)
+                            recent_content_seen[content_key] = now
+                            if last_seen is not None and now - last_seen < CONTENT_DEDUP_WINDOW:
+                                continue
+                            # 順手清掉過期項目，避免這個 dict 隨直播時間無限長大
+                            if len(recent_content_seen) > 500:
+                                recent_content_seen = {
+                                    k: v for k, v in recent_content_seen.items()
+                                    if now - v < CONTENT_DEDUP_WINDOW
+                                }
+
                             matched_rule = None
                             for rule in self.config.rules:
                                 if rule.is_enabled and any(kw in content for kw in rule.trigger_keywords):
@@ -474,8 +493,11 @@ class YouTubeLiveTacticalBot:
                                 if not priority_rule and random.random() < 0.20 and self.config.poison_pill_base:
                                     suggested_reply = random.choice(self.config.poison_pill_base)
 
-                                # 3. 自動加上@留言者，讓回覆明確是針對這則攻擊留言
-                                mention_reply = f"@{author} {suggested_reply}"
+                                # 3. 自動加上@留言者，讓回覆明確是針對這則攻擊留言。
+                                # YouTube 頻道名稱本身有時就以 @ 開頭（例如
+                                # "@H_Minnie_米妮"），無條件加 @ 會變成 "@@..."。
+                                handle = author if author.startswith("@") else f"@{author}"
+                                mention_reply = f"{handle} {suggested_reply}"
 
                                 # 4. 全自動送出模式：偵測到側翼攻擊且已有對應回覆時，
                                 # 直接嘗試送出（一樣要經過冷卻閘門，不管同時有多少
