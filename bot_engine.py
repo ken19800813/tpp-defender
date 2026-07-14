@@ -8,10 +8,13 @@ import queue
 import subprocess
 import requests
 from datetime import datetime
+from pathlib import Path
 from playwright.sync_api import sync_playwright
 
-LOGS_DIR = "logs"
-BROWSER_PROFILE_DIR = "browser_profile"
+# 使用用戶主目錄，避免只讀文件系統問題
+APP_DATA_DIR = Path.home() / ".tppchat"
+LOGS_DIR = str(APP_DATA_DIR / "logs")
+BROWSER_PROFILE_DIR = str(APP_DATA_DIR / "browser_profile")
 
 # 送出冷卻秒數：不管是手動點擊送出還是全自動送出模式，兩次實際送出
 # 之間至少要間隔這麼多秒，嚴禁被拿來洗版聊天室。
