@@ -130,25 +130,16 @@ def bind_paste(entry):
             text = pyperclip.paste()
             if not text:
                 return "break"
-        except Exception:
+            # 清空輸入框
+            entry.delete(0, "end")
+            # 貼上文字
+            entry.insert(0, text)
             return "break"
-        try:
-            # 清除已選取的文字
-            entry.delete("0.0", "end") if entry.cget("state") != "disabled" else None
-        except Exception:
-            try:
-                entry.delete(0, "end")
-            except Exception:
-                pass
-        try:
-            entry.insert("0.0", text) if hasattr(entry, 'delete') and "0.0" else entry.insert(0, text)
-        except Exception:
-            try:
-                entry.insert(0, text)
-            except Exception:
-                pass
-        return "break"
+        except Exception as e:
+            print(f"貼上失敗: {e}")
+            return "break"
 
+    # 綁定快捷鍵（Ctrl+V for Windows/Linux, Cmd+V for Mac）
     entry.bind("<Control-v>", do_paste)
     entry.bind("<Command-v>", do_paste)
     return entry
@@ -578,7 +569,11 @@ class App(ctk.CTk):
 
         edit_menu = tk.Menu(menubar, tearoff=0, bg="#1c2626", fg="white", relief="flat")
         menubar.add_cascade(label="編輯", menu=edit_menu)
-        edit_menu.add_command(label="貼上網址 (Cmd+V)", command=self._paste_url)
+        edit_menu.add_command(label="貼上網址 (Ctrl+V / Cmd+V)", command=self._paste_url)
+
+        # 全域快捷鍵綁定
+        self.bind("<Control-v>", lambda e: self._paste_url())
+        self.bind("<Command-v>", lambda e: self._paste_url())
 
     def _paste_url(self):
         """從剪貼簿貼上網址到「直播網址」輸入框"""
