@@ -293,32 +293,44 @@ class YouTubeLiveTacticalBot:
                             if matched_rule:
                                 self._append_message_log(author, content, flagged=True)
 
-                                # 1. 挑選澄清草稿
-                                suggested_reply = random.choice(matched_rule.reply_pool)
+                                # 1. 命中任何關鍵字規則就算偵測到側翼攻擊；但實際
+                                # 要用哪個回覆池，如果使用者設定了「最優先規則」，
+                                # 一律改用該規則的回覆內容，不管實際命中的是哪一條
+                                # 關鍵字規則——關鍵字偵測仍然是「有沒有被判定為
+                                # 攻擊」的前提，只是回覆內容的選擇被優先規則取代。
+                                priority_rule = next(
+                                    (r for r in self.config.rules if r.is_enabled and getattr(r, "is_priority", False)),
+                                    None
+                                )
+                                reply_source = priority_rule if priority_rule else matched_rule
+                                suggested_reply = random.choice(reply_source.reply_pool)
 
-                                # 2. 20% 透明反擊建議覆蓋機制
-                                if random.random() < 0.20 and self.config.poison_pill_base:
+                                # 2. 20% 透明反擊建議覆蓋機制（優先規則不受此覆蓋，
+                                # 使用者既然設定了優先內容，就該原封不動地送出）
+                                if not priority_rule and random.random() < 0.20 and self.config.poison_pill_base:
                                     suggested_reply = random.choice(self.config.poison_pill_base)
 
-                                # 3. 全自動送出模式：偵測到側翼攻擊且已有對應回覆時，
-                                # 不彈窗、直接送出（一樣要經過冷卻閘門）
+                                # 3. 自動加上@留言者，讓回覆明確是針對這則攻擊留言
+                                mention_reply = f"@{author} {suggested_reply}"
+
+                                # 4. 全自動送出模式：偵測到側翼攻擊且已有對應回覆時，
+                                # 直接嘗試送出（一樣要經過冷卻閘門，不管同時有多少
+                                # 則留言或多少條規則命中，都只受同一個冷卻限制）。
+                                # 不管有沒有真的送出，都要彈出告知視窗讓使用者知道
+                                # 發生了側翼攻擊——這裡只是不需要使用者動手確認。
                                 if getattr(self.config, "auto_send_enabled", False):
-                                    if self._try_send(suggested_reply):
-                                        self.ui_callback("AUTO_SENT", {
-                                            "author": author,
-                                            "content": content,
-                                            "reply": suggested_reply
-                                        })
-                                    else:
-                                        self.ui_callback(
-                                            "SYSTEM",
-                                            f"全自動送出被冷卻機制擋下，跳過此則留言：{content[:30]}"
-                                        )
+                                    sent = self._try_send(mention_reply)
+                                    self.ui_callback("AUTO_SENT", {
+                                        "author": author,
+                                        "content": content,
+                                        "reply": mention_reply,
+                                        "sent": sent,
+                                    })
                                 else:
                                     self.ui_callback("ALERT", {
                                         "author": author,
                                         "content": content,
-                                        "reply": suggested_reply
+                                        "reply": mention_reply
                                     })
                             else:
                                 self._append_message_log(author, content, flagged=False)

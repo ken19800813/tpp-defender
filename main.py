@@ -5,12 +5,19 @@ import pyperclip
 import uuid
 import os
 import sys
+import io
 import json
 import glob
 import subprocess
+import threading
+import webbrowser
+import requests
+from PIL import Image
 from config import ConfigManager, Rule
 from logger_thread import BotThreadManager
 from bot_engine import LOGS_DIR
+
+AD_POLL_INTERVAL_MS = 60000
 
 ACCENT = "#28c8c8"
 ACCENT_HOVER = "#1fa3a3"
@@ -306,7 +313,7 @@ class NotificationPopUp(ctk.CTkToplevel):
         self.attributes("-topmost", True)
 
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        w, h = 480, 400
+        w, h = 480, 300
         self.geometry(f"{w}x{h}+{sw-w-20}+{sh-h-60}")
         self.configure(fg_color="#141a1a", border_color=ACCENT, border_width=2)
 
@@ -328,7 +335,7 @@ class NotificationPopUp(ctk.CTkToplevel):
         ).pack(side="left")
 
         self.reply_box = ctk.CTkTextbox(
-            self, font=("Arial", 15), height=110, wrap="word",
+            self, font=("Arial", 15), height=80, wrap="word",
             fg_color="#0a0f0f", text_color="#ffffff", border_width=1, border_color="#333"
         )
         self.reply_box.pack(fill="x", padx=16, pady=(4, 4))
@@ -421,6 +428,105 @@ class NotificationPopUp(ctk.CTkToplevel):
         self.after(600, self.destroy)
 
 
+class AdPopUp(ctk.CTkToplevel):
+    """廣告推播彈窗：顯示後台設定的圖片、文字與超連結。每支廣告對每台
+    電腦只會顯示一次（由 ConfigManager 在本機記錄已看過的廣告id）。
+    這是一般視窗（非overrideredirect），使用者可以直接用標題列關閉。"""
+    def __init__(self, parent, title_text, image_bytes, link_url):
+        super().__init__(parent)
+        self.link_url = link_url
+
+        self.title("推播訊息")
+        self.attributes("-topmost", True)
+        self.configure(fg_color="#141a1a")
+        self.resizable(False, False)
+
+        content = ctk.CTkFrame(self, fg_color="transparent")
+        content.pack(padx=18, pady=18)
+
+        if image_bytes:
+            try:
+                pil_img = Image.open(io.BytesIO(image_bytes))
+                pil_img.thumbnail((380, 260))
+                ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=pil_img.size)
+                ctk.CTkLabel(content, image=ctk_img, text="").pack(pady=(0, 12))
+            except Exception:
+                pass
+
+        if title_text:
+            ctk.CTkLabel(
+                content, text=title_text, font=("Arial", 15), text_color="#e8fdfd",
+                wraplength=380, justify="left"
+            ).pack(pady=(0, 14))
+
+        btn_row = ctk.CTkFrame(content, fg_color="transparent")
+        btn_row.pack(fill="x")
+
+        if link_url:
+            ctk.CTkButton(
+                btn_row, text="前往連結", font=FONT_BUTTON,
+                fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a",
+                command=self.on_open_link, height=42
+            ).pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        ctk.CTkButton(
+            btn_row, text="關閉", font=FONT_BUTTON,
+            fg_color="#444", hover_color="#555",
+            command=self.destroy, height=42, width=100
+        ).pack(side="left")
+
+    def on_open_link(self):
+        if self.link_url:
+            webbrowser.open(self.link_url)
+
+
+class AutoSentNotice(ctk.CTkToplevel):
+    """全自動送出模式下的告知彈窗：純顯示用途，不需要使用者操作即可送出，
+    但為了讓使用者知道確實發生了側翼攻擊（以及系統實際回了什麼、或因冷卻
+    中而暫時沒送出），仍會彈出視窗告知，幾秒後自動關閉，也可以手動提早關閉。"""
+    AUTO_CLOSE_MS = 8000
+
+    def __init__(self, parent, author, content, reply, sent):
+        super().__init__(parent)
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        w, h = 480, 260
+        self.geometry(f"{w}x{h}+{sw-w-20}+{sh-h-60}")
+        status_color = ACCENT if sent else "#ffb020"
+        self.configure(fg_color="#141a1a", border_color=status_color, border_width=2)
+
+        status_text = "已自動送出反擊！" if sent else "偵測到側翼攻擊，冷卻中暫未送出"
+        ctk.CTkLabel(
+            self, text=status_text, font=("Arial", 17, "bold"), text_color=status_color
+        ).pack(pady=(14, 6), padx=16, anchor="w")
+
+        ctk.CTkLabel(
+            self, text=f"{author}：{content}",
+            font=("Arial", 14), text_color="#cfcfcf", wraplength=440, justify="left"
+        ).pack(pady=(0, 8), padx=16, anchor="w")
+
+        ctk.CTkLabel(
+            self, text=f"回覆內容：{reply}",
+            font=("Arial", 14), text_color=ACCENT, wraplength=440, justify="left"
+        ).pack(pady=(0, 10), padx=16, anchor="w")
+
+        ctk.CTkButton(
+            self, text="關閉", font=FONT_BUTTON,
+            fg_color="#444", hover_color="#555",
+            command=self._safe_destroy, height=40
+        ).pack(padx=16, pady=(4, 14), fill="x")
+
+        self.after(self.AUTO_CLOSE_MS, self._safe_destroy)
+
+    def _safe_destroy(self):
+        try:
+            self.destroy()
+        except Exception:
+            pass
+
+
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -439,6 +545,29 @@ class App(ctk.CTk):
         self.bot_manager = BotThreadManager(self.config_mgr, self.handle_bot_signal)
         self._setup_ttk_styles()
         self.setup_ui()
+        self.after(5000, self._check_ads)
+
+    def _check_ads(self):
+        """定時檢查有沒有新的廣告推播，不管有沒有在監看直播都會執行。
+        實際的網路請求(抓廣告清單+抓圖片)丟到背景執行緒，避免卡住UI。"""
+        threading.Thread(target=self._check_ads_worker, daemon=True).start()
+        self.after(AD_POLL_INTERVAL_MS, self._check_ads)
+
+    def _check_ads_worker(self):
+        new_ads = self.config_mgr.fetch_new_ads()
+        for ad in new_ads:
+            image_bytes = None
+            image_url = ad.get("image_url")
+            if image_url:
+                try:
+                    resp = requests.get(image_url, timeout=6)
+                    if resp.status_code == 200:
+                        image_bytes = resp.content
+                except Exception:
+                    pass
+            self.after(0, lambda a=ad, img=image_bytes: AdPopUp(
+                self, a.get("title", ""), img, a.get("link_url", "")
+            ))
 
     def _setup_ttk_styles(self):
         """統一設定深色主題下的Treeview/Scrollbar樣式(ttk預設是淺色，跟整體風格衝突)"""
@@ -604,10 +733,12 @@ class App(ctk.CTk):
         info_icon(
             row3,
             "開啟後，偵測到側翼攻擊留言且系統已找到對應的反擊回覆時，\n"
-            "會直接自動送出到聊天室，不會再彈出確認小窗讓你先看過內容。\n"
+            "會直接自動送出到聊天室，不需要你手動確認——但仍會彈出一個\n"
+            "告知視窗（幾秒後自動關閉），讓你知道發生了攻擊、系統回了什麼，\n"
+            "回覆內容會自動加上「@留言者」明確指名對象。\n"
             "關閉（預設）時維持原本流程：彈窗顯示、你確認或編輯後手動按送出。\n\n"
-            "不管開關與否，送出動作都受同一個10秒冷卻機制限制，\n"
-            "不能拿來洗版聊天室。",
+            "不管開關與否、不管同時有多少留言或多少條規則命中，\n"
+            "送出動作都受同一個10秒冷卻機制限制，不能拿來洗版聊天室。",
             side="left", padx=(10, 0)
         )
 
@@ -708,17 +839,19 @@ class App(ctk.CTk):
         tree_frame.pack(fill="both", expand=True)
 
         self.rules_tree = ttk.Treeview(
-            tree_frame, columns=("no", "keywords", "replies", "source"), show="headings",
+            tree_frame, columns=("no", "keywords", "replies", "source", "priority"), show="headings",
             style="Rules.Treeview", height=self._rules_page_size
         )
         self.rules_tree.heading("no", text="編號")
         self.rules_tree.heading("keywords", text="偵測關鍵字")
         self.rules_tree.heading("replies", text="反擊內容")
         self.rules_tree.heading("source", text="來源")
+        self.rules_tree.heading("priority", text="優先層級")
         self.rules_tree.column("no", width=60, minwidth=50, anchor="center", stretch=False)
         self.rules_tree.column("keywords", width=420, minwidth=200, anchor="w", stretch=True)
         self.rules_tree.column("replies", width=420, minwidth=200, anchor="w", stretch=True)
         self.rules_tree.column("source", width=90, minwidth=80, anchor="center", stretch=False)
+        self.rules_tree.column("priority", width=100, minwidth=90, anchor="center", stretch=False)
 
         scrollbar = ttk.Scrollbar(
             tree_frame, orient="vertical", command=self.rules_tree.yview,
@@ -1101,10 +1234,13 @@ class App(ctk.CTk):
                 cooldown_getter=self.bot_manager.get_cooldown_remaining
             )
         elif msg_type == "AUTO_SENT":
+            sent = data.get("sent", False)
+            status_label = "已自動送出" if sent else "冷卻中未送出"
             self.append_log(
-                f"[已自動送出] {data['author']}: {data['content']} -> {data['reply']}",
+                f"[全自動-{status_label}] {data['author']}: {data['content']} -> {data['reply']}",
                 "AUTO_SENT"
             )
+            AutoSentNotice(self, data['author'], data['content'], data['reply'], sent)
         elif msg_type == "NORMAL":
             self.append_log_normal(f"{data['author']}: {data['content']}")
         elif msg_type == "SYSTEM":
@@ -1132,12 +1268,13 @@ class App(ctk.CTk):
     # ------------------------------------------------------------------
     # 規則對話框
     # ------------------------------------------------------------------
-    def _rule_editor_dialog(self, title, initial_keywords="", initial_replies="", on_save=None):
+    def _rule_editor_dialog(self, title, initial_keywords="", initial_replies="",
+                             initial_priority=False, on_save=None):
         """共用的新增/編輯規則表單"""
         dlg = ctk.CTkToplevel(self)
         dlg.title(title)
-        dlg.geometry("620x520")
-        dlg.minsize(480, 400)
+        dlg.geometry("620x560")
+        dlg.minsize(480, 440)
         dlg.attributes("-topmost", True)
 
         ctk.CTkLabel(dlg, text="關鍵字 (用逗號分隔):", font=FONT_LABEL).pack(anchor="w", padx=14, pady=(14, 6))
@@ -1152,6 +1289,21 @@ class App(ctk.CTk):
         text_replies.insert("1.0", initial_replies)
         style_scrollbar(text_replies)
 
+        priority_var = ctk.BooleanVar(value=initial_priority)
+        priority_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        priority_row.pack(fill="x", padx=14, pady=(8, 0))
+        ctk.CTkCheckBox(
+            priority_row, text="設為最優先規則", font=FONT_LABEL, variable=priority_var,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER
+        ).pack(side="left")
+        info_icon(
+            priority_row,
+            "命中任何一條規則的關鍵字後（不管是哪一條），回覆內容都會\n"
+            "改用這條「最優先規則」的內容，等於是全站統一回覆語句。\n"
+            "如果同時有多條規則被設為最優先，系統只會採用其中一條。",
+            side="left", padx=(8, 0)
+        )
+
         def do_save():
             keywords = [k.strip() for k in entry_keywords.get().split(",") if k.strip()]
             replies = [r.strip() for r in text_replies.get("1.0", "end").split("\n") if r.strip()]
@@ -1164,20 +1316,21 @@ class App(ctk.CTk):
                 messagebox.showerror("安全性錯誤", "偵測到內容包含禁用詞彙，系統已拒絕儲存！")
                 return
 
-            on_save(keywords, replies)
+            on_save(keywords, replies, bool(priority_var.get()))
             dlg.destroy()
 
         ctk.CTkButton(dlg, text="儲存規則", command=do_save, font=FONT_BUTTON, height=44,
                        fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a").pack(pady=14)
 
     def add_rule_dialog(self):
-        def on_save(keywords, replies):
+        def on_save(keywords, replies, is_priority):
             rule = Rule(
                 id=str(uuid.uuid4()),
                 trigger_keywords=keywords,
                 match_type="contains",
                 reply_pool=replies,
-                is_enabled=True
+                is_enabled=True,
+                is_priority=is_priority
             )
             self.config_mgr.add_rule(rule)
             self.refresh_rules_display()
@@ -1209,13 +1362,14 @@ class App(ctk.CTk):
         def open_editor_for(rule):
             picker.destroy()
 
-            def on_save(keywords, replies):
+            def on_save(keywords, replies, is_priority):
                 updated = Rule(
                     id=rule.id,
                     trigger_keywords=keywords,
                     match_type="contains",
                     reply_pool=replies,
-                    is_enabled=rule.is_enabled
+                    is_enabled=rule.is_enabled,
+                    is_priority=is_priority
                 )
                 self.config_mgr.update_rule(rule.id, updated)
                 self.refresh_rules_display()
@@ -1225,6 +1379,7 @@ class App(ctk.CTk):
                 "編輯規則",
                 initial_keywords=", ".join(rule.trigger_keywords),
                 initial_replies="\n".join(rule.reply_pool),
+                initial_priority=getattr(rule, "is_priority", False),
                 on_save=on_save
             )
 
@@ -1300,9 +1455,10 @@ class App(ctk.CTk):
             keywords_str = truncate(", ".join(rule.trigger_keywords))
             replies_str = truncate(" / ".join(rule.reply_pool))
             source_label = "自訂" if is_user else "雲端"
+            priority_label = "⭐最優先" if getattr(rule, "is_priority", False) else ""
             iid = self.rules_tree.insert(
                 "", "end",
-                values=(idx, keywords_str, replies_str, source_label),
+                values=(idx, keywords_str, replies_str, source_label, priority_label),
                 tags=("user" if is_user else "cloud",)
             )
             self._rules_by_iid[iid] = rule

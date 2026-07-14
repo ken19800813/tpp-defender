@@ -18,6 +18,11 @@ VERSION_INFO_FILE = "security_version.json"
 LIVESTREAM_CONFIG_API_URL = "https://line-news-0p7m.onrender.com/api/livestream/config"
 LIVESTREAM_CACHE_FILE = "livestream_cache.json"
 
+# 廣告推播：獨立於上面的設定同步之外，用比較短的輪詢間隔單獨檢查，
+# 避免廣告要等好幾分鐘才生效，也不用每次都把整包規則資料抓一次。
+LIVESTREAM_ADS_API_URL = "https://line-news-0p7m.onrender.com/api/livestream/ads/active"
+SEEN_ADS_FILE = "seen_ads.json"
+
 
 @dataclass
 class Rule:
@@ -26,6 +31,8 @@ class Rule:
     match_type: str
     reply_pool: List[str]
     is_enabled: bool = True
+    is_priority: bool = False  # 最優先回覆規則：命中任何規則的關鍵字後，
+    # 若存在啟用中的優先規則，回覆內容一律改用該規則，不管實際命中的是哪一條
 
 
 @dataclass
@@ -46,6 +53,7 @@ class ConfigManager:
         self.marquee_messages: List[str] = []
         self.marquee_speed_level: int = 4
         self.auto_send_enabled: bool = False
+        self.seen_ad_ids = self._load_seen_ads()
 
         self.fetch_remote_rules()
         self.fetch_livestream_config()
@@ -124,6 +132,44 @@ class ConfigManager:
                     self.marquee_speed_level = data.get("marquee_speed_level", 4)
             except Exception:
                 pass
+
+    def _load_seen_ads(self):
+        if os.path.exists(SEEN_ADS_FILE):
+            try:
+                with open(SEEN_ADS_FILE, "r", encoding="utf-8") as f:
+                    return set(json.load(f))
+            except Exception:
+                return set()
+        return set()
+
+    def _save_seen_ads(self):
+        try:
+            with open(SEEN_ADS_FILE, "w", encoding="utf-8") as f:
+                json.dump(list(self.seen_ad_ids), f)
+        except Exception:
+            pass
+
+    def fetch_new_ads(self):
+        """回傳目前有效、但這台電腦還沒顯示過的廣告清單，並立即標記為已顯示
+        （避免同一支廣告在下次輪詢時又跳出來一次）。連線失敗時安靜回傳空清單，
+        不影響其他功能。"""
+        try:
+            res = requests.get(LIVESTREAM_ADS_API_URL, timeout=4)
+            if res.status_code != 200:
+                return []
+            data = res.json()
+            if not data.get("success"):
+                return []
+            ads = data.get("ads", [])
+        except Exception:
+            return []
+
+        new_ads = [ad for ad in ads if ad.get("id") not in self.seen_ad_ids]
+        if new_ads:
+            for ad in new_ads:
+                self.seen_ad_ids.add(ad["id"])
+            self._save_seen_ads()
+        return new_ads
 
     def _load_from_local_cache(self):
         """從本機快取載入 GitHub 端規則（forbidden_attack_words / poison_pill_replies）"""
