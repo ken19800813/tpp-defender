@@ -142,15 +142,18 @@ class YouTubeLiveTacticalBot:
         }
         return title
 
-    def _append_message_log(self, author: str, content: str, flagged: bool):
-        """記錄單則留言（無論是否被判定為側翼攻擊）"""
+    def _append_message_log(self, author: str, content: str, flagged: bool, superchat_amount: str = None):
+        """記錄單則留言（無論是否被判定為側翼攻擊；抖內另加金額欄位）"""
         if self.session_log is not None:
-            self.session_log["messages"].append({
+            entry = {
                 "author": author,
                 "content": content,
                 "flagged": flagged,
                 "time": datetime.now().strftime("%H:%M:%S")
-            })
+            }
+            if superchat_amount:
+                entry["superchat_amount"] = superchat_amount
+            self.session_log["messages"].append(entry)
 
     def _save_session_log(self):
         """直播結束後將完整聊天記錄存檔到 logs/ 目錄"""
@@ -385,6 +388,33 @@ class YouTubeLiveTacticalBot:
                                     f"送出被冷卻機制擋下（{SEND_COOLDOWN_SECONDS}秒內僅能送出一次，"
                                     f"避免洗版），已跳過：{queued_text[:30]}"
                                 )
+
+                        # 抖內（Super Chat / Super Sticker）：跟一般留言是不同的
+                        # DOM 元件，要分開抓，才能在日誌裡標示鵝黃色底提醒使用者。
+                        superchats = self.page.query_selector_all(
+                            "yt-live-chat-paid-message-renderer, yt-live-chat-paid-sticker-renderer"
+                        )
+                        for sc in superchats:
+                            sc_id = sc.get_attribute("id") or sc.get_attribute("data-message-id")
+                            if not sc_id or sc_id in processed_msg_ids:
+                                continue
+                            processed_msg_ids.add(sc_id)
+
+                            author_el = sc.query_selector("#author-name")
+                            amount_el = sc.query_selector("#purchase-amount, #purchase-amount-chip")
+                            content_el = sc.query_selector("#message")
+                            if not author_el or not amount_el:
+                                continue
+
+                            sc_author = author_el.inner_text()
+                            sc_amount = amount_el.inner_text()
+                            sc_content = content_el.inner_text() if content_el else ""
+                            self._append_message_log(sc_author, sc_content, flagged=False, superchat_amount=sc_amount)
+                            self.ui_callback("SUPERCHAT", {
+                                "author": sc_author,
+                                "amount": sc_amount,
+                                "content": sc_content,
+                            })
 
                         messages = self.page.query_selector_all("yt-live-chat-text-message-renderer")
                         for msg in messages:

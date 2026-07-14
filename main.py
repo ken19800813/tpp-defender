@@ -855,6 +855,8 @@ class App(ctk.CTk):
         self.log_text.tag_config("SYSTEM", foreground="#8fb3b3")
         self.log_text.tag_config("NORMAL", foreground=LOG_WHITE)
         self.log_text.tag_config("AUTO_SENT", foreground=ACCENT, background="#0a1a1a")
+        # 抖內（Super Chat）：鵝黃色底，讓打賞留言在日誌裡一眼就能看到
+        self.log_text.tag_config("SUPERCHAT", foreground="#3a2c00", background="#f5c518")
 
     def on_toggle_auto_send(self):
         enabled = bool(self.auto_send_var.get())
@@ -1319,6 +1321,12 @@ class App(ctk.CTk):
             AutoSentNotice(self, data['author'], data['content'], data['reply'], sent)
         elif msg_type == "NORMAL":
             self.append_log_normal(f"{data['author']}: {data['content']}")
+        elif msg_type == "SUPERCHAT":
+            content_part = f"：{data['content']}" if data.get('content') else ""
+            self.append_log(
+                f"[💰抖內 {data['amount']}] {data['author']}{content_part}",
+                "SUPERCHAT"
+            )
         elif msg_type == "SYSTEM":
             self.append_log_system(data)
 
