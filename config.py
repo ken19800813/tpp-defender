@@ -11,6 +11,10 @@ REMOTE_SECURITY_URL = base64.b64decode(REMOTE_SECURITY_URL_B64).decode()
 CACHE_FILE = "security_cache.json"
 VERSION_INFO_FILE = "security_version.json"
 
+# 跑馬燈改由 LINEBOT 後台(/ken_admin/marquee)統一編輯與更新，
+# GitHub security_rules.json 的 marquee_messages 欄位僅作為連不到時的備援
+MARQUEE_API_URL = "https://line-news-0p7m.onrender.com/api/social/marquee"
+
 
 @dataclass
 class Rule:
@@ -39,6 +43,7 @@ class ConfigManager:
         self.marquee_messages: List[str] = []
 
         self.fetch_remote_rules()
+        self.fetch_marquee_messages()
         self.load()
         self._rebuild_rules()
 
@@ -85,6 +90,20 @@ class ConfigManager:
             pass
 
         self._load_from_local_cache()
+
+    def fetch_marquee_messages(self):
+        """跑馬燈文字改由 LINEBOT 後台(/ken_admin/marquee)統一編輯與更新。
+        self.marquee_messages 此時已經有 fetch_remote_rules() 從 GitHub
+        security_rules.json 讀到的舊值(當備援)，這裡連線成功才覆蓋過去；
+        連不到的話就沿用備援值，不會讓跑馬燈整個空白。"""
+        try:
+            res = requests.get(MARQUEE_API_URL, timeout=4)
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("success"):
+                    self.marquee_messages = data.get("messages", [])
+        except Exception:
+            pass
 
     def _load_from_local_cache(self):
         """從本機快取載入規則"""
