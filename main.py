@@ -557,8 +557,31 @@ class App(ctk.CTk):
         self.config_mgr = ConfigManager()
         self.bot_manager = BotThreadManager(self.config_mgr, self.handle_bot_signal)
         self._setup_ttk_styles()
+        self._setup_menu()
         self.setup_ui()
         self.after(5000, self._check_ads)
+
+    def _setup_menu(self):
+        """加入菜單欄，提供編輯功能（主要是貼上網址）"""
+        menubar = tk.Menu(self, bg="#1c2626", fg="white", relief="flat")
+        self.config(menu=menubar)
+
+        edit_menu = tk.Menu(menubar, tearoff=0, bg="#1c2626", fg="white", relief="flat")
+        menubar.add_cascade(label="編輯", menu=edit_menu)
+        edit_menu.add_command(label="貼上網址 (Cmd+V)", command=self._paste_url)
+
+    def _paste_url(self):
+        """從剪貼簿貼上網址到「直播網址」輸入框"""
+        try:
+            url = pyperclip.paste()
+            if hasattr(self, 'stream_url_entry'):
+                self.stream_url_entry.delete(0, "end")
+                self.stream_url_entry.insert(0, url)
+                messagebox.showinfo("成功", f"已貼上：{url[:60]}...")
+            else:
+                messagebox.showwarning("提示", "找不到直播網址輸入框")
+        except Exception as e:
+            messagebox.showerror("貼上失敗", str(e))
 
     def _check_ads(self):
         """定時檢查有沒有新的廣告推播，不管有沒有在監看直播都會執行。
@@ -1533,5 +1556,22 @@ class App(ctk.CTk):
 
 
 if __name__ == "__main__":
-    app = App()
-    app.mainloop()
+    import socket
+
+    # 防止重複啟動：試著佔用一個特定的 port（9876），若失敗表示已有實例運行
+    try:
+        lock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        lock_socket.bind(("127.0.0.1", 9876))
+        lock_socket.listen(1)
+    except OSError:
+        messagebox.showerror(
+            "應用已在執行",
+            "直播小幫手已在運行中，請勿重複啟動多個實例。"
+        )
+        sys.exit(1)
+
+    try:
+        app = App()
+        app.mainloop()
+    finally:
+        lock_socket.close()

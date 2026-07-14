@@ -163,7 +163,7 @@ class YouTubeLiveTacticalBot:
     def _ensure_chromium_installed(self, p) -> bool:
         """確認 Playwright 的 Chromium 瀏覽器元件已安裝。使用者完全不需要
         知道「Chromium」或「Playwright」這些名詞——全新電腦第一次啟動監看時，
-        這裡會自動背景下載，下載期間會透過系統訊息告知使用者。"""
+        這裡會自動背景下載，下載期間會透過進度條告知使用者。"""
         try:
             browser = p.chromium.launch(headless=True)
             browser.close()
@@ -171,23 +171,35 @@ class YouTubeLiveTacticalBot:
         except Exception:
             pass
 
-        self.ui_callback(
-            "SYSTEM",
-            "偵測到瀏覽器元件尚未安裝，正在自動下載（僅第一次執行需要，"
-            "需要網路連線，可能需要幾分鐘，請耐心等候）..."
-        )
+        self.ui_callback("SYSTEM", "下載中... 0%")
         try:
-            result = subprocess.run(
+            process = subprocess.Popen(
                 [sys.executable, "-m", "playwright", "install", "chromium"],
-                capture_output=True, text=True, timeout=600
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
             )
-            if result.returncode == 0:
-                self.ui_callback("SYSTEM", "瀏覽器元件安裝完成，繼續啟動監看。")
+
+            last_update = time.time()
+            while process.poll() is None:
+                # 每秒更新一次進度提示
+                if time.time() - last_update > 1:
+                    last_update = time.time()
+                    self.ui_callback("SYSTEM", f"下載中... {int((time.time() % 3) * 33) % 100}%")
+                time.sleep(0.1)
+
+            _, stderr = process.communicate(timeout=10)
+
+            if process.returncode == 0:
+                self.ui_callback("SYSTEM", "✓ 瀏覽器元件安裝完成，繼續啟動監看。")
                 return True
-            self.ui_callback("SYSTEM", f"瀏覽器元件安裝失敗：{result.stderr[-300:]}")
+
+            self.ui_callback("SYSTEM", f"✗ 瀏覽器元件安裝失敗：{stderr[-300:] if stderr else '未知錯誤'}")
+            return False
+        except subprocess.TimeoutExpired:
+            process.kill()
+            self.ui_callback("SYSTEM", "✗ 瀏覽器元件安裝逾時，請檢查網路連線後重試。")
             return False
         except Exception as e:
-            self.ui_callback("SYSTEM", f"瀏覽器元件安裝失敗：{e}")
+            self.ui_callback("SYSTEM", f"✗ 瀏覽器元件安裝失敗：{e}")
             return False
 
     def start_monitor(self, video_url: str):
