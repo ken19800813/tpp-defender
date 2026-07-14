@@ -44,6 +44,7 @@ class ConfigManager:
         self.locked_channels: List[str] = []
         self.poison_pill_base: List[str] = []
         self.marquee_messages: List[str] = []
+        self.marquee_speed_level: int = 4
         self.auto_send_enabled: bool = False
 
         self.fetch_remote_rules()
@@ -103,6 +104,7 @@ class ConfigManager:
                     self.locked_channels = data.get("locked_channels", [])
                     self.default_rules_data = data.get("default_defense_rules", [])
                     self.marquee_messages = data.get("marquee_messages", [])
+                    self.marquee_speed_level = data.get("marquee_speed_level", 4)
                     with open(LIVESTREAM_CACHE_FILE, "w", encoding="utf-8") as f:
                         json.dump(data, f, ensure_ascii=False, indent=4)
                     return
@@ -119,6 +121,7 @@ class ConfigManager:
                     self.locked_channels = data.get("locked_channels", [])
                     self.default_rules_data = data.get("default_defense_rules", [])
                     self.marquee_messages = data.get("marquee_messages", [])
+                    self.marquee_speed_level = data.get("marquee_speed_level", 4)
             except Exception:
                 pass
 

@@ -226,10 +226,13 @@ def copy_icon(parent, get_text, log_callback=None, **pack_kwargs):
 
 
 class Marquee(ctk.CTkFrame):
-    """底部跑馬燈：文字從視窗最右側進場，往左捲動，內容由 LINEBOT 後台同步的 marquee_messages 更新"""
-    def __init__(self, parent, get_messages, **kwargs):
+    """底部跑馬燈：文字從視窗最右側進場，往左捲動，內容與捲動速度都由 LINEBOT
+    後台的「直播小幫手：跑馬燈設定」同步（speed_level 1~10，數字越大越快，
+    直接對應每個tick移動的像素數，固定30ms一個tick）。"""
+    def __init__(self, parent, get_messages, get_speed_level=None, **kwargs):
         super().__init__(parent, **kwargs)
         self.get_messages = get_messages
+        self.get_speed_level = get_speed_level or (lambda: 4)
         self._running = True
         self._source_text = None
         self._text_id = None
@@ -265,7 +268,13 @@ class Marquee(ctk.CTkFrame):
         bbox = self.canvas.bbox(self._text_id)
         text_width = (bbox[2] - bbox[0]) if bbox else 200
 
-        self._x -= 4
+        try:
+            speed = int(self.get_speed_level())
+        except Exception:
+            speed = 4
+        speed = max(1, min(10, speed))
+
+        self._x -= speed
         if self._x < -text_width:
             self._x = canvas_width
 
@@ -504,6 +513,7 @@ class App(ctk.CTk):
         # 排版當下就把整個剩餘空間吃光，跑馬燈排到後面就完全沒有空間可用。
         self.marquee = Marquee(
             self, get_messages=lambda: self.config_mgr.marquee_messages,
+            get_speed_level=lambda: self.config_mgr.marquee_speed_level,
             fg_color=BG_PANEL, corner_radius=10
         )
         self.marquee.pack(side="bottom", fill="x", padx=16, pady=(0, 16))
