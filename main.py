@@ -63,6 +63,24 @@ def bring_chat_browser_to_front():
         pass
 
 
+# 基本髒話/粗俗字眼黑名單（本機固定，跟雲端 forbidden_words 疊加檢查）。
+# 這裡只抓明顯的髒話本身，不含泛政治攻擊詞彙——那些已由雲端
+# forbidden_words 另外把關，避免這份清單過度擴張誤擋正常反擊言論。
+LOCAL_PROFANITY_BLOCKLIST = [
+    "幹你", "你媽的", "媽的", "他媽的", "三字經", "王八蛋", "幹你娘",
+    "去你的", "白痴", "智障", "賤人", "婊子", "幹拎老師", "干你娘",
+]
+
+
+def find_forbidden_word(text, extra_forbidden_words=None):
+    """檢查文字是否包含髒話或雲端禁用詞，找到就回傳該詞，否則回傳None"""
+    words = LOCAL_PROFANITY_BLOCKLIST + list(extra_forbidden_words or [])
+    for word in words:
+        if word and word in text:
+            return word
+    return None
+
+
 class ToolTip:
     """滑入顯示功能說明的輕量提示框"""
     def __init__(self, widget, text):
@@ -208,52 +226,105 @@ class Marquee(ctk.CTkFrame):
 
 
 class NotificationPopUp(ctk.CTkToplevel):
-    """置頂警示小彈窗：使用者看過實際文字後點擊送出，會自動打字進聊天室並直接送出
-    （這一步會真的公開發言，仍保留「點擊前必須先看過完整文字」這道最後把關）"""
-    def __init__(self, parent, author, content, reply, ui_log_callback, on_send=None):
+    """置頂警示小彈窗：顯示系統建議的回覆，但文字是可編輯的——使用者可以先修改
+    內容再送出。送出前會即時檢查是否包含髒話/禁用詞，違規時整個擋下、無法送出。
+    點擊送出後，會自動打字進聊天室並直接送出（這一步會真的公開發言）。"""
+    def __init__(self, parent, author, content, reply, ui_log_callback,
+                 on_send=None, forbidden_words=None):
         super().__init__(parent)
-        self.reply_text = reply
         self.ui_log_callback = ui_log_callback
         self.on_send = on_send
+        self.forbidden_words = forbidden_words or []
 
         self.overrideredirect(True)
         self.attributes("-topmost", True)
 
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        w, h = 420, 220
+        w, h = 480, 400
         self.geometry(f"{w}x{h}+{sw-w-20}+{sh-h-60}")
         self.configure(fg_color="#141a1a", border_color=ACCENT, border_width=2)
 
         ctk.CTkLabel(
             self, text="偵測到側翼攻擊留言！",
             font=("Arial", 17, "bold"), text_color=DANGER
-        ).pack(pady=(14, 6))
+        ).pack(pady=(14, 6), padx=16, anchor="w")
 
         ctk.CTkLabel(
-            self, text=author,
-            font=("Arial", 15, "bold"), text_color=ACCENT
-        ).pack(pady=2)
+            self, text=f"{author}：{content}",
+            font=("Arial", 14), text_color="#cfcfcf", wraplength=440, justify="left"
+        ).pack(pady=(0, 10), padx=16, anchor="w")
 
+        edit_header = ctk.CTkFrame(self, fg_color="transparent")
+        edit_header.pack(fill="x", padx=16)
         ctk.CTkLabel(
-            self, text=content,
-            font=("Arial", 15), wraplength=380, justify="left"
-        ).pack(pady=6)
+            edit_header, text="回覆內容（可自行修改）：",
+            font=("Arial", 14, "bold"), text_color=ACCENT
+        ).pack(side="left")
 
-        self.btn_copy = ctk.CTkButton(
-            self, text=f"自動送出：{reply[:18]}...",
-            font=FONT_BUTTON,
+        self.reply_box = ctk.CTkTextbox(
+            self, font=("Arial", 15), height=110, wrap="word",
+            fg_color="#0a0f0f", text_color="#ffffff", border_width=1, border_color="#333"
+        )
+        self.reply_box.pack(fill="x", padx=16, pady=(4, 4))
+        self.reply_box.insert("1.0", reply)
+        self.reply_box.bind("<KeyRelease>", self._on_text_changed)
+        self.reply_box.bind("<Return>", self._on_return_key)
+        self.reply_box.bind("<Shift-Return>", lambda e: None)
+
+        self.warning_label = ctk.CTkLabel(
+            self, text="", font=("Arial", 13, "bold"), text_color=DANGER
+        )
+        self.warning_label.pack(padx=16, anchor="w")
+
+        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=(6, 14))
+
+        self.btn_send = ctk.CTkButton(
+            btn_row, text="送出", font=FONT_BUTTON,
             fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a",
             command=self.on_click_send, height=46
         )
-        self.btn_copy.pack(pady=10, padx=14, fill="x")
-        self.bind("<Space>", lambda e: self.on_click_send())
-        self.btn_copy.focus_set()
+        self.btn_send.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        ctk.CTkButton(
+            btn_row, text="取消", font=FONT_BUTTON,
+            fg_color="#444", hover_color="#555",
+            command=self.destroy, height=46, width=100
+        ).pack(side="left")
+
+        self.reply_box.focus_set()
+        self._on_text_changed()
+
+    def _on_return_key(self, event):
+        """在編輯框按 Enter＝送出，Shift+Enter 才是換行（符合一般聊天輸入習慣）"""
+        self.on_click_send()
+        return "break"
+
+    def _get_text(self) -> str:
+        return self.reply_box.get("1.0", "end").strip()
+
+    def _on_text_changed(self, event=None):
+        text = self._get_text()
+        bad_word = find_forbidden_word(text, self.forbidden_words)
+        if bad_word:
+            self.warning_label.configure(text=f"⚠ 內容包含禁用詞彙「{bad_word}」，無法送出")
+            self.reply_box.configure(border_color=DANGER)
+            self.btn_send.configure(state="disabled", fg_color="#555")
+        else:
+            self.warning_label.configure(text="")
+            self.reply_box.configure(border_color="#333")
+            self.btn_send.configure(state="normal", fg_color=ACCENT)
 
     def on_click_send(self):
-        pyperclip.copy(self.reply_text)
-        self.ui_log_callback("SYSTEM", f"正在自動送出反擊建議：{self.reply_text}")
+        text = self._get_text()
+        if not text:
+            return
+        if find_forbidden_word(text, self.forbidden_words):
+            return  # 按鈕理論上已被停用，這裡再擋一次防止例如Enter快捷鍵繞過
+        pyperclip.copy(text)
+        self.ui_log_callback("SYSTEM", f"正在自動送出反擊建議：{text}")
         if self.on_send:
-            self.on_send(self.reply_text)
+            self.on_send(text)
         self.destroy()
         bring_chat_browser_to_front()
 
@@ -432,8 +503,9 @@ class App(ctk.CTk):
             "顯示聊天室的即時留言。\n"
             "白字＝一般留言；紅字＝被判定為側翼攻擊的留言（並會彈出反擊建議小窗）；\n"
             "灰字＝系統訊息。\n"
-            "小窗按下「自動送出」後，系統會直接打字並送出到聊天室——\n"
-            "送出前你都能在小窗看清楚實際文字，按下去就是真的公開發言，請留意。\n"
+            "小窗上的回覆內容可以自行修改，按下「送出」後系統會直接打字並\n"
+            "送出到聊天室——這是真的公開發言，請留意；若修改後的內容包含\n"
+            "髒話或禁用詞，送出鍵會自動被停用、無法送出。\n"
             "直播結束或按下停止後，本場完整記錄會自動存到「歷史記錄」頁籤。\n\n"
             "沒看到彈跳視窗？可以點右邊「測試彈跳視窗」按鈕，\n"
             "先確認彈窗機制本身正常運作，再確認聊天室是否真的出現觸發關鍵字。",
@@ -894,7 +966,8 @@ class App(ctk.CTk):
             self.append_log_highlight(f"[側翼攻擊] {data['author']}: {data['content']}")
             NotificationPopUp(
                 self, data['author'], data['content'], data['reply'],
-                self.handle_bot_signal, on_send=self.request_auto_send
+                self.handle_bot_signal, on_send=self.request_auto_send,
+                forbidden_words=self.config_mgr.forbidden_words
             )
         elif msg_type == "NORMAL":
             self.append_log_normal(f"{data['author']}: {data['content']}")
