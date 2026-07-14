@@ -1384,7 +1384,7 @@ class App(ctk.CTk):
                 entry_keywords.delete(0, "end")
                 entry_keywords.insert(0, "不管什麼垃圾字，所有攻擊都用此訊息回覆")
             else:
-                entry_keywords.configure(state="normal", text_color=TEXT_COLOR)
+                entry_keywords.configure(state="normal", text_color="#e8fdfd")
                 entry_keywords.delete(0, "end")
                 entry_keywords.insert(0, initial_keywords)
 
