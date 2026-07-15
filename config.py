@@ -246,16 +246,17 @@ class ConfigManager:
         cloud_rules = [Rule(**r) for r in self.default_rules_data]
         self.rules = cloud_rules + self.user_rules
 
-    def validate_custom_rule(self, user_keywords: List[str], user_replies: List[str]) -> bool:
-        """雙向審查：若輸入內容包含中央禁用詞，則攔截拒絕儲存"""
+    def validate_custom_rule(self, user_keywords: List[str], user_replies: List[str]) -> tuple:
+        """雙向審查：若輸入內容包含中央禁用詞，則攔截拒絕儲存。
+        回傳 (is_valid: bool, error_message: str)；valid 時 error_message 為空"""
         for word in self.forbidden_words:
             for kw in user_keywords:
                 if word in kw:
-                    return False
+                    return False, f"關鍵字不能包含：{word}"
             for rp in user_replies:
                 if word in rp:
-                    return False
-        return True
+                    return False, f"回應文不能包含：{word}"
+        return True, ""
 
     def share_rule_to_cloud(self, trigger_keywords: List[str],
                              reply_pool: List[str]) -> tuple:

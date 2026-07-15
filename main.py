@@ -1689,8 +1689,9 @@ class App(ctk.CTk):
                 messagebox.showerror("錯誤", "回覆內容不能為空")
                 return
 
-            if not self.config_mgr.validate_custom_rule(keywords, replies):
-                messagebox.showerror("安全性錯誤", "偵測到內容包含禁用詞彙，系統已拒絕儲存！")
+            is_valid, error_msg = self.config_mgr.validate_custom_rule(keywords, replies)
+            if not is_valid:
+                messagebox.showerror("安全性錯誤", f"⛔ {error_msg}")
                 return
 
             dlg.destroy()  # 先關閉視窗，再讓 on_save 顯示訊息，避免 messagebox 卡住
