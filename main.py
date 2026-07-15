@@ -972,10 +972,18 @@ class App(ctk.CTk):
         self.rules_search_entry.pack(side="right", padx=(10, 0))
         self.rules_search_entry.bind("<KeyRelease>", self._on_rules_search_change)
 
-        # 不用 expand=True，避免規則列表把分頁列擠出可視範圍外——
-        # Treeview 本身的 height=列數 已經決定好高度，這裡只要橫向撐滿即可。
+        # 分頁列先用 side="bottom" 卡住底部，確保任何每頁筆數（10/20/50）下都不會
+        # 被規則列表擠出可視範圍；規則列表再用 expand 填滿中間剩餘空間，超出的列
+        # 交給右側捲軸捲動（不再用 Treeview 的 height=頁筆數 去撐高整個控件）。
+        _, self.rules_page_label, self.rules_prev_btn, self.rules_next_btn, _ = pagination_bar(
+            frame_list, self._rules_prev_page, self._rules_next_page,
+            page_size_options=[10, 20, 50], on_size_change=self._rules_change_page_size,
+            default_size=self._rules_page_size,
+            side="bottom", fill="x", pady=(8, 0)
+        )
+
         tree_frame = ctk.CTkFrame(frame_list, fg_color="transparent")
-        tree_frame.pack(fill="x", expand=False)
+        tree_frame.pack(fill="both", expand=True)
 
         self.rules_tree = ttk.Treeview(
             tree_frame, columns=("no", "keywords", "replies", "source", "priority"), show="headings",
@@ -1011,19 +1019,11 @@ class App(ctk.CTk):
         self.rules_tree.bind("<B1-Motion>", self._on_rules_tree_motion)
         self.rules_tree.bind("<ButtonRelease-1>", self._on_rules_tree_release)
 
-        _, self.rules_page_label, self.rules_prev_btn, self.rules_next_btn, _ = pagination_bar(
-            frame_list, self._rules_prev_page, self._rules_next_page,
-            page_size_options=[10, 20, 50], on_size_change=self._rules_change_page_size,
-            default_size=self._rules_page_size,
-            fill="x", pady=(8, 0)
-        )
-
         self.refresh_rules_display()
 
     def _rules_change_page_size(self, size):
         self._rules_page_size = size
         self._rules_page = 0
-        self.rules_tree.configure(height=size)
         self.refresh_rules_display()
 
     def _rules_prev_page(self):
