@@ -313,20 +313,26 @@ class NotificationPopUp(ctk.CTkToplevel):
     無法點擊，嚴禁被拿來洗版聊天室。點擊送出後，會自動打字進聊天室並直接送出
     （這一步會真的公開發言）。"""
     def __init__(self, parent, author, content, reply, ui_log_callback,
-                 on_send=None, forbidden_words=None, cooldown_getter=None):
+                 on_send=None, forbidden_words=None, cooldown_getter=None,
+                 msg_id=None, moderator_mode=False, on_ban=None):
         super().__init__(parent)
         self.ui_log_callback = ui_log_callback
         self.on_send = on_send
         self.forbidden_words = forbidden_words or []
         self.cooldown_getter = cooldown_getter or (lambda: 0.0)
         self._has_sent = False
+        self._has_banned = False
         self._alive = True
+        self.author = author
+        self.msg_id = msg_id
+        self.moderator_mode = moderator_mode
+        self.on_ban = on_ban
 
         self.overrideredirect(True)
         self.attributes("-topmost", True)
 
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        w, h = 480, 300
+        w, h = 480, 340 if moderator_mode else 300
         self.geometry(f"{w}x{h}+{sw-w-20}+{sh-h-60}")
         self.configure(fg_color="#141a1a", border_color=ACCENT, border_width=2)
 
@@ -375,6 +381,16 @@ class NotificationPopUp(ctk.CTkToplevel):
             fg_color="#444", hover_color="#555",
             command=self.destroy, height=46, width=100
         ).pack(side="left")
+
+        if self.moderator_mode:
+            ban_row = ctk.CTkFrame(self, fg_color="transparent")
+            ban_row.pack(fill="x", padx=16, pady=(0, 14))
+            self.btn_ban = ctk.CTkButton(
+                ban_row, text="🚫 封鎖此人", font=FONT_BUTTON,
+                fg_color=DANGER, hover_color="#cc3333", text_color="#ffffff",
+                command=self.on_click_ban, height=42
+            )
+            self.btn_ban.pack(fill="x")
 
         self.reply_box.focus_set()
         self._refresh_button_state()
@@ -439,6 +455,24 @@ class NotificationPopUp(ctk.CTkToplevel):
             self.on_send(text)
         bring_chat_browser_to_front()
         self.after(600, self.destroy)
+
+    def on_click_ban(self):
+        if self._has_banned or not self.msg_id:
+            return
+        if not messagebox.askyesno(
+            "確認封鎖",
+            f"確定要封鎖「{self.author}」嗎？\n\n"
+            "這會隱藏該使用者在本場直播的所有留言（YouTube原生功能）。\n"
+            "只有本頻道的主持人／版主帳號才能執行成功；如果目前登入的\n"
+            "帳號沒有這個權限，系統會回報失敗，不會誤封任何人。"
+        ):
+            return
+
+        self._has_banned = True
+        self.btn_ban.configure(text="封鎖處理中...", state="disabled", fg_color="#555")
+        self.ui_log_callback("SYSTEM", f"正在嘗試封鎖 {self.author}...")
+        if self.on_ban:
+            self.on_ban(self.msg_id, self.author)
 
 
 class AdPopUp(ctk.CTkToplevel):
@@ -889,6 +923,30 @@ class App(ctk.CTk):
             side="left", padx=(10, 0)
         )
 
+        row4 = ctk.CTkFrame(frame_url, fg_color="transparent")
+        row4.pack(fill="x", pady=(6, 0))
+
+        self.moderator_mode_var = ctk.BooleanVar(value=self.config_mgr.moderator_mode)
+        self.moderator_mode_switch = ctk.CTkSwitch(
+            row4, text="頻道主／版主模式", font=FONT_LABEL_BOLD,
+            variable=self.moderator_mode_var, command=self.on_toggle_moderator_mode,
+            progress_color=DANGER, button_color="#eee", button_hover_color="#fff"
+        )
+        self.moderator_mode_switch.pack(side="left")
+        info_icon(
+            row4,
+            "開啟後，側翼攻擊彈窗會多一個「🚫封鎖此人」按鈕，方便你直播\n"
+            "當下直接處理攻擊留言者。點下去會先跳出確認視窗，避免手滑誤按。\n\n"
+            "重要：這個開關只是「要不要顯示按鈕」，實際能不能封鎖成功，\n"
+            "取決於你目前用來監看聊天室的 YouTube 帳號是否真的是本頻道的\n"
+            "頻道主或已授權的板主——如果只是一般觀眾帳號，按下去會直接\n"
+            "回報「沒有權限」，不會誤封、也不會假裝成功。\n\n"
+            "封鎖動作＝YouTube原生的「隱藏使用者」功能，會讓該使用者在本場\n"
+            "直播的留言全部隱藏，這是YouTube帳號層級的操作，不是本工具\n"
+            "自己的黑名單，離開這場直播後仍然由YouTube規則決定是否解除。",
+            side="left", padx=(10, 0)
+        )
+
         # 日誌顯示區
         frame_log = ctk.CTkFrame(tab, fg_color="transparent")
         frame_log.pack(fill="both", expand=True, padx=8, pady=(16, 8))
@@ -934,6 +992,15 @@ class App(ctk.CTk):
         self.append_log_system(
             "全自動送出模式已開啟：偵測到側翼攻擊會直接送出回覆，不再跳出確認小窗。"
             if enabled else "全自動送出模式已關閉：偵測到側翼攻擊會跳出小窗，需手動確認才送出。"
+        )
+
+    def on_toggle_moderator_mode(self):
+        enabled = bool(self.moderator_mode_var.get())
+        self.config_mgr.set_moderator_mode(enabled)
+        self.append_log_system(
+            "頻道主／版主模式已開啟：側翼攻擊彈窗會出現「封鎖此人」按鈕"
+            "（實際能否封鎖仍取決於你的YouTube帳號是否真的有本頻道權限）。"
+            if enabled else "頻道主／版主模式已關閉：側翼攻擊彈窗不再顯示封鎖按鈕。"
         )
 
     # ------------------------------------------------------------------
@@ -1430,8 +1497,14 @@ class App(ctk.CTk):
                 self, data['author'], data['content'], data['reply'],
                 self.handle_bot_signal, on_send=self.request_auto_send,
                 forbidden_words=self.config_mgr.forbidden_words,
-                cooldown_getter=self.bot_manager.get_cooldown_remaining
+                cooldown_getter=self.bot_manager.get_cooldown_remaining,
+                msg_id=data.get('msg_id'),
+                moderator_mode=self.config_mgr.moderator_mode,
+                on_ban=self.request_ban
             )
+        elif msg_type == "BAN_RESULT":
+            status = "成功" if data.get("success") else "失敗"
+            self.append_log_system(f"[封鎖{status}] {data.get('message', '')}")
         elif msg_type == "AUTO_SENT":
             sent = data.get("sent", False)
             status_label = "已自動送出" if sent else "冷卻中未送出"
@@ -1454,6 +1527,10 @@ class App(ctk.CTk):
     def request_auto_send(self, text):
         """把使用者確認過的回覆文字交給bot背景執行緒自動打字送出聊天室"""
         self.bot_manager.request_send(text)
+
+    def request_ban(self, msg_id, author):
+        """把使用者確認過的封鎖指令交給bot背景執行緒執行"""
+        self.bot_manager.request_ban(msg_id, author)
 
     def append_log(self, text, tag="NORMAL"):
         self.log_text.config(state="normal")

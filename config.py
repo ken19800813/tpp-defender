@@ -58,6 +58,12 @@ class ConfigManager:
         self.marquee_messages: List[str] = []
         self.marquee_speed_level: int = 4
         self.auto_send_enabled: bool = False
+        # 頻道主/版主模式：開啟後側翼攻擊彈窗會出現「封鎖此人」按鈕。
+        # 實際能不能封鎖成功仍取決於 YouTube 帳號本身是否有本頻道的板主
+        # 權限——這個開關只是「要不要顯示按鈕」，真正的權限判斷發生在
+        # 按下按鈕當下（bot_engine._try_ban 嘗試操作，選單沒有封鎖選項
+        # 就代表沒權限，直接回報失敗，不會誤導使用者）。
+        self.moderator_mode: bool = False
         self.last_share_date = None  # 每日分享批次上次成功嘗試的日期字串 "YYYY-MM-DD"，None 代表從未執行過
         self.seen_ad_ids = self._load_seen_ads()
         self.synced_config_version = None  # 本機目前已套用的直播設定 version，None=從未成功下載過
@@ -228,6 +234,7 @@ class ConfigManager:
                     d = json.load(f)
                     self.user_rules = [Rule(**r) for r in d.get("rules", [])]
                     self.auto_send_enabled = d.get("auto_send_enabled", False)
+                    self.moderator_mode = d.get("moderator_mode", False)
                     self.last_share_date = d.get("last_share_date")
             except Exception:
                 self.user_rules = []
@@ -284,6 +291,7 @@ class ConfigManager:
                 {
                     "rules": [asdict(r) for r in self.user_rules],
                     "auto_send_enabled": self.auto_send_enabled,
+                    "moderator_mode": self.moderator_mode,
                     "last_share_date": self.last_share_date,
                 },
                 f,
@@ -294,6 +302,10 @@ class ConfigManager:
     def set_auto_send_enabled(self, enabled: bool):
         """開關全自動送出模式，並持久化到本機設定檔"""
         self.auto_send_enabled = enabled
+
+    def set_moderator_mode(self, enabled: bool):
+        """開關頻道主/版主模式（決定側翼攻擊彈窗是否顯示封鎖按鈕），持久化"""
+        self.moderator_mode = enabled
         self.save()
 
     def add_rule(self, rule: Rule):

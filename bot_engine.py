@@ -59,6 +59,7 @@ class YouTubeLiveTacticalBot:
         self.page = None
         self.session_log = None
         self.send_queue = queue.Queue()
+        self.ban_queue = queue.Queue()
         self.last_send_time = 0.0
         # CDP 接管模式下，保存 Playwright 連上的 browser 物件；收尾時只
         # 「斷開連線」不「關閉瀏覽器」，避免關掉使用者自己的真實 Chrome。
@@ -70,6 +71,72 @@ class YouTubeLiveTacticalBot:
         Playwright的page物件只能在建立它的執行緒(本bot的背景執行緒)操作，
         所以用queue把指令帶進start_monitor()的迴圈裡執行，而不是直接呼叫。"""
         self.send_queue.put(text)
+
+    def queue_ban(self, msg_id: str, author: str):
+        """從主UI執行緒排入一則封鎖指令，同理必須丟進背景執行緒的
+        Playwright page操作，不能跨執行緒直接呼叫。"""
+        self.ban_queue.put((msg_id, author))
+
+    def _try_ban(self, msg_id: str, author: str):
+        """嘗試封鎖留言者（隱藏該使用者在本場直播的所有留言）。
+        這個操作只有頻道主/版主的YouTube帳號才有權限執行——一般觀眾
+        帳號的留言選單完全不會出現「封鎖使用者」這個選項，所以這裡
+        不用另外做「是不是頻道主」的預先判斷，直接嘗試操作，選單裡
+        找不到封鎖選項就直接回報「沒有權限」，這就是最準確的權限偵測
+        方式（比起猜測帳號身份，直接試一次動作更可靠）。
+        回傳 (success: bool, message: str)。"""
+        try:
+            msg_el = self.page.query_selector(f'[id="{msg_id}"]')
+            if not msg_el:
+                return False, "留言已消失（可能已被捲出畫面或刪除），無法封鎖"
+
+            menu_btn = msg_el.query_selector("#menu-button, yt-icon-button#menu-button")
+            if not menu_btn:
+                return False, "找不到留言選單按鈕，可能是YouTube介面版本差異"
+            menu_btn.click()
+
+            try:
+                self.page.wait_for_selector(
+                    "tp-yt-paper-listbox #items, ytd-menu-popup-renderer tp-yt-paper-item, tp-yt-paper-item",
+                    timeout=2000
+                )
+            except Exception:
+                return False, "選單未彈出，可能是網路延遲，請重試"
+
+            menu_items = self.page.query_selector_all("tp-yt-paper-item, ytd-menu-service-item-renderer")
+            ban_item = None
+            for item in menu_items:
+                try:
+                    item_text = item.inner_text().strip()
+                except Exception:
+                    continue
+                if any(kw in item_text for kw in ["封鎖", "隱藏", "Hide user", "Block"]):
+                    ban_item = item
+                    break
+
+            if not ban_item:
+                self.page.keyboard.press("Escape")
+                return False, "您沒有本頻道的板主/主持人權限，無法封鎖使用者"
+
+            ban_item.click()
+
+            # YouTube通常會再彈一次確認對話框(「隱藏這位使用者的所有訊息？」)，
+            # 有的話要再點一次確認按鈕；沒有彈出就當作已經直接生效。
+            try:
+                self.page.wait_for_selector(
+                    "yt-confirm-dialog-renderer, tp-yt-paper-dialog", timeout=1500
+                )
+                confirm_buttons = self.page.query_selector_all(
+                    "yt-confirm-dialog-renderer #confirm-button, tp-yt-paper-dialog #confirm-button"
+                )
+                if confirm_buttons:
+                    confirm_buttons[0].click()
+            except Exception:
+                pass  # 沒有二次確認視窗，代表已直接生效
+
+            return True, f"已封鎖 {author}，該使用者在本場直播的留言將不再顯示"
+        except Exception as e:
+            return False, f"封鎖操作失敗：{e}"
 
     def get_cooldown_remaining(self) -> float:
         """回傳距離下次可以送出還要等幾秒，0表示現在就可以送。"""
@@ -434,6 +501,13 @@ class YouTubeLiveTacticalBot:
                                     f"避免洗版），已跳過：{queued_text[:30]}"
                                 )
 
+                        while not self.ban_queue.empty():
+                            ban_msg_id, ban_author = self.ban_queue.get()
+                            success, message = self._try_ban(ban_msg_id, ban_author)
+                            self.ui_callback("BAN_RESULT", {
+                                "author": ban_author, "success": success, "message": message
+                            })
+
                         # 抖內（Super Chat / Super Sticker）：跟一般留言是不同的
                         # DOM 元件，要分開抓，才能在日誌裡標示鵝黃色底提醒使用者。
                         superchats = self.page.query_selector_all(
@@ -533,7 +607,8 @@ class YouTubeLiveTacticalBot:
                                     self.ui_callback("ALERT", {
                                         "author": author,
                                         "content": content,
-                                        "reply": mention_reply
+                                        "reply": mention_reply,
+                                        "msg_id": msg_id
                                     })
                             else:
                                 self._append_message_log(author, content, flagged=False)

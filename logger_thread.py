@@ -39,6 +39,11 @@ class BotThreadManager:
         if self.bot and self.bot.is_running:
             self.bot.queue_send(text)
 
+    def request_ban(self, msg_id: str, author: str):
+        """從主UI執行緒請求封鎖留言者，同理丟進bot背景執行緒的queue處理"""
+        if self.bot and self.bot.is_running:
+            self.bot.queue_ban(msg_id, author)
+
     def get_cooldown_remaining(self) -> float:
         """查詢距離下次可送出還要等幾秒，沒有監聽中就回傳0(不擋)"""
         if self.bot and self.bot.is_running:
