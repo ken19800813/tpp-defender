@@ -694,13 +694,44 @@ class App(ctk.CTk):
         widget.bind("<Control-Button-1>", show_menu)  # macOS 觸控板 Ctrl+點擊
 
     def _setup_menu(self):
-        """加入菜單欄，提供編輯功能（主要是貼上網址）"""
+        """加入菜單欄，提供編輯功能。
+
+        關鍵：macOS 上一旦用 self.config(menu=menubar) 換掉系統預設選單列，
+        Tk 內建那個會自動把 Cmd+C/V/X/A 轉發給目前焦點元件的隱形 Edit 選單
+        就跟著消失了——macOS 的 Cmd+按鍵快捷鍵是靠選單系統的「按鍵對應」
+        比對生效，選單裡沒有對應項目，系統就直接把按鍵吃掉，連 Tkinter
+        的 widget.bind() 都收不到事件。所以只綁 bind_paste() 在 widget 上
+        沒用，一定要在選單列補回「剪下/複製/貼上/全選」這幾個標準項目，
+        且要對「目前有焦點的元件」動作（不是寫死某個輸入框），才能讓
+        Cmd+V 在任何輸入框都正常運作。"""
         menubar = tk.Menu(self, bg="#1c2626", fg="white", relief="flat")
         self.config(menu=menubar)
 
         edit_menu = tk.Menu(menubar, tearoff=0, bg="#1c2626", fg="white", relief="flat")
         menubar.add_cascade(label="編輯", menu=edit_menu)
-        edit_menu.add_command(label="貼上網址 (Ctrl+V / Cmd+V)", command=self._paste_url)
+
+        def _focused_widget():
+            try:
+                return self.focus_get()
+            except Exception:
+                return None
+
+        def _gen(virtual_event):
+            def handler():
+                w = _focused_widget()
+                if w is not None:
+                    try:
+                        w.event_generate(virtual_event)
+                    except Exception:
+                        pass
+            return handler
+
+        edit_menu.add_command(label="剪下", command=_gen("<<Cut>>"), accelerator="Cmd+X")
+        edit_menu.add_command(label="複製", command=_gen("<<Copy>>"), accelerator="Cmd+C")
+        edit_menu.add_command(label="貼上", command=_gen("<<Paste>>"), accelerator="Cmd+V")
+        edit_menu.add_command(label="全選", command=_gen("<<SelectAll>>"), accelerator="Cmd+A")
+        edit_menu.add_separator()
+        edit_menu.add_command(label="貼上網址到「直播網址」欄位", command=self._paste_url)
 
     def _paste_url(self):
         """從剪貼簿貼上網址到「直播網址」輸入框（選單用）"""
