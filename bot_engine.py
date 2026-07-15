@@ -72,29 +72,48 @@ class YouTubeLiveTacticalBot:
         所以用queue把指令帶進start_monitor()的迴圈裡執行，而不是直接呼叫。"""
         self.send_queue.put(text)
 
-    def queue_ban(self, msg_id: str, author: str):
-        """從主UI執行緒排入一則封鎖指令，同理必須丟進背景執行緒的
-        Playwright page操作，不能跨執行緒直接呼叫。"""
-        self.ban_queue.put((msg_id, author))
+    # YouTube 直播聊天室「暫時禁言(Timeout)」原生支援的6種時長，key是
+    # 內部代號，labels是選單項目可能出現的文字(中英文都列，YouTube介面
+    # 語言依帳號設定而異，用文字比對找項目時全部都要嘗試)。
+    TIMEOUT_PRESETS = {
+        "10s": ["10 秒", "10秒", "10 seconds"],
+        "1m":  ["1 分鐘", "1分鐘", "1 minute"],
+        "5m":  ["5 分鐘", "5分鐘", "5 minutes"],
+        "10m": ["10 分鐘", "10分鐘", "10 minutes"],
+        "30m": ["30 分鐘", "30分鐘", "30 minutes"],
+        "24h": ["24 小時", "24小時", "24 hours"],
+    }
+    # 開啟禁言子選單用的觸發文字(中英文)，YouTube選單裡這一項通常叫
+    # 「暫停計時」或「Timeout」，點下去才會展開上面6個時長選項。
+    _TIMEOUT_TRIGGER_LABELS = ["暫停計時", "禁言", "Timeout"]
 
-    def _try_ban(self, msg_id: str, author: str):
-        """嘗試封鎖留言者（隱藏該使用者在本場直播的所有留言）。
-        這個操作只有頻道主/版主的YouTube帳號才有權限執行——一般觀眾
-        帳號的留言選單完全不會出現「封鎖使用者」這個選項，所以這裡
+    def queue_ban(self, msg_id: str, author: str, duration_key: str = "5m"):
+        """從主UI執行緒排入一則禁言指令，同理必須丟進背景執行緒的
+        Playwright page操作，不能跨執行緒直接呼叫。duration_key對應
+        TIMEOUT_PRESETS的key，預設5分鐘。"""
+        self.ban_queue.put((msg_id, author, duration_key))
+
+    def _try_ban(self, msg_id: str, author: str, duration_key: str = "5m"):
+        """嘗試對留言者執行YouTube原生的「暫時禁言(Timeout)」，時長對應
+        duration_key(見TIMEOUT_PRESETS，共10秒/1分鐘/5分鐘/10分鐘/
+        30分鐘/24小時6種，跟YouTube官方選單完全一致，沒有多做假的
+        時長選項)。這個操作只有頻道主/版主的YouTube帳號才有權限執行，
+        一般觀眾帳號的留言選單根本不會出現「暫停計時」這個項目，所以
         不用另外做「是不是頻道主」的預先判斷，直接嘗試操作，選單裡
-        找不到封鎖選項就直接回報「沒有權限」，這就是最準確的權限偵測
-        方式（比起猜測帳號身份，直接試一次動作更可靠）。
+        找不到禁言選項就直接回報「沒有權限」，這就是最準確的權限偵測
+        方式(比起猜測帳號身份，直接試一次動作更可靠)。
 
         刻意不套用 SEND_COOLDOWN_SECONDS 送出冷卻機制：冷卻是為了防止
-        「發言洗版」，封鎖是隱藏對方帳號的單向管理動作、不會產生任何
-        新留言，兩者風險性質不同，確認是頻道主本人操作時應該讓他能
+        「發言洗版」，禁言是管理對方帳號的單向動作、不會產生任何新
+        留言，兩者風險性質不同，確認是頻道主本人操作時應該讓他能
         連續處理多個側翼攻擊者，不該被送出冷卻卡住。
 
         回傳 (success: bool, message: str)。"""
+        duration_labels = self.TIMEOUT_PRESETS.get(duration_key, self.TIMEOUT_PRESETS["5m"])
         try:
             msg_el = self.page.query_selector(f'[id="{msg_id}"]')
             if not msg_el:
-                return False, "留言已消失（可能已被捲出畫面或刪除），無法封鎖"
+                return False, "留言已消失（可能已被捲出畫面或刪除），無法禁言"
 
             menu_btn = msg_el.query_selector("#menu-button, yt-icon-button#menu-button")
             if not menu_btn:
@@ -109,24 +128,41 @@ class YouTubeLiveTacticalBot:
             except Exception:
                 return False, "選單未彈出，可能是網路延遲，請重試"
 
-            menu_items = self.page.query_selector_all("tp-yt-paper-item, ytd-menu-service-item-renderer")
-            ban_item = None
-            for item in menu_items:
+            def _find_menu_item(labels):
+                for item in self.page.query_selector_all(
+                    "tp-yt-paper-item, ytd-menu-service-item-renderer"
+                ):
+                    try:
+                        item_text = item.inner_text().strip()
+                    except Exception:
+                        continue
+                    if any(kw in item_text for kw in labels):
+                        return item
+                return None
+
+            # 先直接找時長本身有沒有出現在第一層選單(某些介面版本會把
+            # 6個時長直接攤平列在同一層，不用先點「暫停計時」進子選單)。
+            duration_item = _find_menu_item(duration_labels)
+            if not duration_item:
+                # 找不到就退而求其次：先點開「暫停計時」子選單，等它展開
+                # 後再找一次對應時長的項目。
+                trigger_item = _find_menu_item(self._TIMEOUT_TRIGGER_LABELS)
+                if not trigger_item:
+                    self.page.keyboard.press("Escape")
+                    return False, "您沒有本頻道的板主/主持人權限，無法禁言使用者"
+                trigger_item.click()
                 try:
-                    item_text = item.inner_text().strip()
+                    self.page.wait_for_timeout(500)  # 等子選單展開動畫
+                    duration_item = _find_menu_item(duration_labels)
                 except Exception:
-                    continue
-                if any(kw in item_text for kw in ["封鎖", "隱藏", "Hide user", "Block"]):
-                    ban_item = item
-                    break
+                    duration_item = None
+                if not duration_item:
+                    self.page.keyboard.press("Escape")
+                    return False, f"找不到「{duration_labels[0]}」這個時長選項，可能是YouTube介面版本差異"
 
-            if not ban_item:
-                self.page.keyboard.press("Escape")
-                return False, "您沒有本頻道的板主/主持人權限，無法封鎖使用者"
+            duration_item.click()
 
-            ban_item.click()
-
-            # YouTube通常會再彈一次確認對話框(「隱藏這位使用者的所有訊息？」)，
+            # YouTube通常會再彈一次確認對話框(「禁言這位使用者N分鐘？」)，
             # 有的話要再點一次確認按鈕；沒有彈出就當作已經直接生效。
             try:
                 self.page.wait_for_selector(
@@ -140,9 +176,9 @@ class YouTubeLiveTacticalBot:
             except Exception:
                 pass  # 沒有二次確認視窗，代表已直接生效
 
-            return True, f"已封鎖 {author}，該使用者在本場直播的留言將不再顯示"
+            return True, f"已禁言 {author}（{duration_labels[0]}），該使用者暫時無法在本場直播發言"
         except Exception as e:
-            return False, f"封鎖操作失敗：{e}"
+            return False, f"禁言操作失敗：{e}"
 
     def get_cooldown_remaining(self) -> float:
         """回傳距離下次可以送出還要等幾秒，0表示現在就可以送。"""
@@ -508,8 +544,8 @@ class YouTubeLiveTacticalBot:
                                 )
 
                         while not self.ban_queue.empty():
-                            ban_msg_id, ban_author = self.ban_queue.get()
-                            success, message = self._try_ban(ban_msg_id, ban_author)
+                            ban_msg_id, ban_author, ban_duration = self.ban_queue.get()
+                            success, message = self._try_ban(ban_msg_id, ban_author, ban_duration)
                             self.ui_callback("BAN_RESULT", {
                                 "author": ban_author, "success": success, "message": message
                             })

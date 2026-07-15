@@ -34,6 +34,14 @@ LOG_WHITE = "#ffffff"
 SCROLL_BG = "#1c2626"
 SCROLL_TROUGH = "#0a0f0f"
 
+# 禁言時長：跟YouTube直播聊天室原生「暫時禁言(Timeout)」選單完全一致的
+# 6個選項，不多做假的自訂時長（YouTube本身也沒開放更細的顆粒度）。
+# key對應bot_engine.YouTubeLiveTacticalBot.TIMEOUT_PRESETS的key。
+BAN_DURATION_LABELS = {
+    "10 秒": "10s", "1 分鐘": "1m", "5 分鐘": "5m",
+    "10 分鐘": "10m", "30 分鐘": "30m", "24 小時": "24h",
+}
+
 # 全域字體（再放大兩級）
 FONT_BRAND = ("Arial", 30, "bold")
 FONT_TAGLINE = ("Arial", 18)
@@ -314,9 +322,10 @@ class NotificationPopUp(ctk.CTkToplevel):
     （這一步會真的公開發言）。"""
     # 同時開著的彈窗實例清單，用來計算層疊位移，避免短時間內連續彈出
     # 多個警示窗時全部疊在同一個座標、後面的窗完全遮住前面的窗看不到。
+    # 只往上堆疊（不左右位移），視覺上比較像通知堆疊、不會顯得凌亂。
     _active_popups = []
-    _CASCADE_OFFSET = 32  # 每多開一個窗，往右下角錯開的像素距離
-    _CASCADE_MAX = 6      # 錯開到第幾個之後就不再繼續位移、改回堆疊在最後一格（避免跑出螢幕）
+    _CASCADE_OFFSET = 36  # 每多開一個窗，往上錯開的像素距離
+    _CASCADE_MAX = 6      # 錯開到第幾個之後就不再繼續位移、改回疊在最上面一格（避免跑出螢幕）
 
     def __init__(self, parent, author, content, reply, ui_log_callback,
                  on_send=None, forbidden_words=None, cooldown_getter=None,
@@ -341,7 +350,7 @@ class NotificationPopUp(ctk.CTkToplevel):
         w, h = 480, 340 if moderator_mode else 300
         slot = min(len(NotificationPopUp._active_popups), NotificationPopUp._CASCADE_MAX)
         offset = slot * NotificationPopUp._CASCADE_OFFSET
-        x = sw - w - 20 - offset
+        x = sw - w - 20
         y = sh - h - 60 - offset
         self.geometry(f"{w}x{h}+{x}+{y}")
         NotificationPopUp._active_popups.append(self)
@@ -396,12 +405,21 @@ class NotificationPopUp(ctk.CTkToplevel):
         if self.moderator_mode:
             ban_row = ctk.CTkFrame(self, fg_color="transparent")
             ban_row.pack(fill="x", padx=16, pady=(0, 14))
+
+            self.ban_duration_var = ctk.StringVar(value="5 分鐘")
+            self.ban_duration_menu = ctk.CTkOptionMenu(
+                ban_row, values=list(BAN_DURATION_LABELS.keys()),
+                variable=self.ban_duration_var, width=100,
+                fg_color="#333", button_color="#444", button_hover_color="#555"
+            )
+            self.ban_duration_menu.pack(side="left", padx=(0, 6))
+
             self.btn_ban = ctk.CTkButton(
-                ban_row, text="🚫 封鎖此人", font=FONT_BUTTON,
+                ban_row, text="🚫 禁言此人", font=FONT_BUTTON,
                 fg_color=DANGER, hover_color="#cc3333", text_color="#ffffff",
                 command=self.on_click_ban, height=42
             )
-            self.btn_ban.pack(fill="x")
+            self.btn_ban.pack(side="left", fill="x", expand=True)
 
         self.reply_box.focus_set()
         self._refresh_button_state()
@@ -472,20 +490,24 @@ class NotificationPopUp(ctk.CTkToplevel):
     def on_click_ban(self):
         if self._has_banned or not self.msg_id:
             return
+        duration_label = self.ban_duration_var.get()
+        duration_key = BAN_DURATION_LABELS.get(duration_label, "5m")
         if not messagebox.askyesno(
-            "確認封鎖",
-            f"確定要封鎖「{self.author}」嗎？\n\n"
-            "這會隱藏該使用者在本場直播的所有留言（YouTube原生功能）。\n"
-            "只有本頻道的主持人／版主帳號才能執行成功；如果目前登入的\n"
-            "帳號沒有這個權限，系統會回報失敗，不會誤封任何人。"
+            "確認禁言",
+            f"確定要禁言「{self.author}」{duration_label}嗎？\n\n"
+            "這是YouTube直播聊天室原生的「暫時禁言」功能，時間到了\n"
+            "會自動恢復發言權限。只有本頻道的主持人／版主帳號才能\n"
+            "執行成功；如果目前登入的帳號沒有這個權限，系統會回報\n"
+            "失敗，不會誤禁任何人。"
         ):
             return
 
         self._has_banned = True
-        self.btn_ban.configure(text="封鎖處理中...", state="disabled", fg_color="#555")
-        self.ui_log_callback("SYSTEM", f"正在嘗試封鎖 {self.author}...")
+        self.btn_ban.configure(text="禁言處理中...", state="disabled", fg_color="#555")
+        self.ban_duration_menu.configure(state="disabled")
+        self.ui_log_callback("SYSTEM", f"正在嘗試禁言 {self.author}（{duration_label}）...")
         if self.on_ban:
-            self.on_ban(self.msg_id, self.author)
+            self.on_ban(self.msg_id, self.author, duration_key)
 
 
 class AdPopUp(ctk.CTkToplevel):
@@ -948,15 +970,17 @@ class App(ctk.CTk):
         self.moderator_mode_switch.pack(side="left")
         info_icon(
             row4,
-            "開啟後，側翼攻擊彈窗會多一個「🚫封鎖此人」按鈕，方便你直播\n"
-            "當下直接處理攻擊留言者。點下去會先跳出確認視窗，避免手滑誤按。\n\n"
-            "重要：這個開關只是「要不要顯示按鈕」，實際能不能封鎖成功，\n"
+            "開啟後，側翼攻擊彈窗會多一個「🚫禁言此人」按鈕（可選時長），\n"
+            "方便你直播當下直接處理攻擊留言者。點下去會先跳出確認視窗，\n"
+            "避免手滑誤按。\n\n"
+            "重要：這個開關只是「要不要顯示按鈕」，實際能不能禁言成功，\n"
             "取決於你目前用來監看聊天室的 YouTube 帳號是否真的是本頻道的\n"
             "頻道主或已授權的板主——如果只是一般觀眾帳號，按下去會直接\n"
-            "回報「沒有權限」，不會誤封、也不會假裝成功。\n\n"
-            "封鎖動作＝YouTube原生的「隱藏使用者」功能，會讓該使用者在本場\n"
-            "直播的留言全部隱藏，這是YouTube帳號層級的操作，不是本工具\n"
-            "自己的黑名單，離開這場直播後仍然由YouTube規則決定是否解除。",
+            "回報「沒有權限」，不會誤禁、也不會假裝成功。\n\n"
+            "禁言動作＝YouTube原生的「暫時禁言(Timeout)」功能，時長選項\n"
+            "跟YouTube官方選單完全一致（10秒/1分鐘/5分鐘/10分鐘/30分鐘/\n"
+            "24小時），時間到會自動恢復，不需要你再手動解除。這是YouTube\n"
+            "帳號層級的操作，不是本工具自己的黑名單。",
             side="left", padx=(10, 0)
         )
 
@@ -1011,9 +1035,9 @@ class App(ctk.CTk):
         enabled = bool(self.moderator_mode_var.get())
         self.config_mgr.set_moderator_mode(enabled)
         self.append_log_system(
-            "頻道主／版主模式已開啟：側翼攻擊彈窗會出現「封鎖此人」按鈕"
-            "（實際能否封鎖仍取決於你的YouTube帳號是否真的有本頻道權限）。"
-            if enabled else "頻道主／版主模式已關閉：側翼攻擊彈窗不再顯示封鎖按鈕。"
+            "頻道主／版主模式已開啟：側翼攻擊彈窗會出現「禁言此人」按鈕"
+            "（實際能否禁言成功仍取決於你的YouTube帳號是否真的有本頻道權限）。"
+            if enabled else "頻道主／版主模式已關閉：側翼攻擊彈窗不再顯示禁言按鈕。"
         )
 
     # ------------------------------------------------------------------
@@ -1517,7 +1541,7 @@ class App(ctk.CTk):
             )
         elif msg_type == "BAN_RESULT":
             status = "成功" if data.get("success") else "失敗"
-            self.append_log_system(f"[封鎖{status}] {data.get('message', '')}")
+            self.append_log_system(f"[禁言{status}] {data.get('message', '')}")
         elif msg_type == "AUTO_SENT":
             sent = data.get("sent", False)
             status_label = "已自動送出" if sent else "冷卻中未送出"
@@ -1541,9 +1565,9 @@ class App(ctk.CTk):
         """把使用者確認過的回覆文字交給bot背景執行緒自動打字送出聊天室"""
         self.bot_manager.request_send(text)
 
-    def request_ban(self, msg_id, author):
-        """把使用者確認過的封鎖指令交給bot背景執行緒執行"""
-        self.bot_manager.request_ban(msg_id, author)
+    def request_ban(self, msg_id, author, duration_key="5m"):
+        """把使用者確認過的禁言指令交給bot背景執行緒執行"""
+        self.bot_manager.request_ban(msg_id, author, duration_key)
 
     def append_log(self, text, tag="NORMAL"):
         self.log_text.config(state="normal")

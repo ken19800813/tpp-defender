@@ -39,10 +39,12 @@ class BotThreadManager:
         if self.bot and self.bot.is_running:
             self.bot.queue_send(text)
 
-    def request_ban(self, msg_id: str, author: str):
-        """從主UI執行緒請求封鎖留言者，同理丟進bot背景執行緒的queue處理"""
+    def request_ban(self, msg_id: str, author: str, duration_key: str = "5m"):
+        """從主UI執行緒請求禁言留言者，同理丟進bot背景執行緒的queue處理。
+        duration_key對應YouTube原生6種暫時禁言時長(見bot_engine.
+        TIMEOUT_PRESETS)，預設5分鐘。"""
         if self.bot and self.bot.is_running:
-            self.bot.queue_ban(msg_id, author)
+            self.bot.queue_ban(msg_id, author, duration_key)
 
     def get_cooldown_remaining(self) -> float:
         """查詢距離下次可送出還要等幾秒，沒有監聽中就回傳0(不擋)"""
