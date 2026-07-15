@@ -488,12 +488,7 @@ class YouTubeLiveTacticalBot:
                                 reply_source = priority_rule if priority_rule else matched_rule
                                 suggested_reply = random.choice(reply_source.reply_pool)
 
-                                # 2. 20% 透明反擊建議覆蓋機制（優先規則不受此覆蓋，
-                                # 使用者既然設定了優先內容，就該原封不動地送出）
-                                if not priority_rule and random.random() < 0.20 and self.config.poison_pill_base:
-                                    suggested_reply = random.choice(self.config.poison_pill_base)
-
-                                # 3. 自動加上@留言者，讓回覆明確是針對這則攻擊留言。
+                                # 2. 自動加上@留言者，讓回覆明確是針對這則攻擊留言。
                                 # YouTube 頻道名稱本身有時就以 @ 開頭（例如
                                 # "@H_Minnie_米妮"），無條件加 @ 會變成 "@@..."。
                                 handle = author if author.startswith("@") else f"@{author}"

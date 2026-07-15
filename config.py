@@ -13,8 +13,7 @@ VERSION_INFO_FILE = "security_version.json"
 
 # 黑名單頻道、防禦關鍵字規則、跑馬燈文字改由 LINEBOT 後台的
 # 「直播小幫手」獨立模組統一編輯與更新(/ken_admin/livestream/*)，
-# GitHub security_rules.json 只再保留 forbidden_attack_words 跟
-# poison_pill_replies(反擊建議)兩項。
+# GitHub security_rules.json 只再保留 forbidden_attack_words 一項。
 LIVESTREAM_CONFIG_API_URL = "https://line-news-0p7m.onrender.com/api/livestream/config"
 LIVESTREAM_VERSION_API_URL = "https://line-news-0p7m.onrender.com/api/livestream/version"
 LIVESTREAM_CACHE_FILE = "livestream_cache.json"
@@ -56,7 +55,6 @@ class ConfigManager:
         self.forbidden_words: List[str] = []
         self.default_rules_data: List[dict] = []
         self.locked_channels: List[str] = []
-        self.poison_pill_base: List[str] = []
         self.marquee_messages: List[str] = []
         self.marquee_speed_level: int = 4
         self.auto_send_enabled: bool = False
@@ -117,7 +115,6 @@ class ConfigManager:
             elif res.status_code == 200:
                 data = res.json()
                 self.forbidden_words = data.get("forbidden_attack_words", [])
-                self.poison_pill_base = data.get("poison_pill_replies", [])
 
                 with open(CACHE_FILE, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=4)
@@ -214,13 +211,12 @@ class ConfigManager:
         return new_ads
 
     def _load_from_local_cache(self):
-        """從本機快取載入 GitHub 端規則（forbidden_attack_words / poison_pill_replies）"""
+        """從本機快取載入 GitHub 端規則（forbidden_attack_words）"""
         if os.path.exists(CACHE_FILE):
             try:
                 with open(CACHE_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.forbidden_words = data.get("forbidden_attack_words", [])
-                    self.poison_pill_base = data.get("poison_pill_replies", [])
             except Exception:
                 pass
 

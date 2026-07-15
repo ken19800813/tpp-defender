@@ -245,22 +245,6 @@ def pagination_bar(parent, on_prev, on_next, page_size_options=None, on_size_cha
     return bar, page_label, prev_btn, next_btn, size_menu
 
 
-def copy_icon(parent, get_text, log_callback=None, **pack_kwargs):
-    """建立一個可點擊的複製圖示，點擊時把get_text()回傳的內容整份複製到剪貼簿"""
-    icon = ctk.CTkLabel(parent, text="⧉", font=FONT_ICON, text_color=ACCENT, cursor="hand2")
-
-    def on_click(event=None):
-        text = get_text()
-        pyperclip.copy(text)
-        if log_callback:
-            log_callback("已複製雲端預設反擊建議全文到剪貼簿。")
-
-    icon.bind("<Button-1>", on_click)
-    icon.pack(**pack_kwargs)
-    ToolTip(icon, "點擊複製完整的雲端預設反擊建議清單到剪貼簿")
-    return icon
-
-
 class Marquee(ctk.CTkFrame):
     """底部跑馬燈：文字從視窗最右側進場，往左捲動，內容與捲動速度都由 LINEBOT
     後台的「直播小幫手：跑馬燈設定」同步（speed_level 1~10，數字越大越快，
@@ -769,7 +753,7 @@ class App(ctk.CTk):
         btn_row = ctk.CTkFrame(tab_bar, fg_color="transparent")
         btn_row.pack(side="left", padx=8, pady=8)
 
-        self.tab_names = ["直播監控", "防禦規則設定", "反擊建議", "歷史記錄"]
+        self.tab_names = ["直播監控", "防禦規則設定", "歷史記錄"]
         self.tab_buttons = {}
         self.tab_frames = {}
 
@@ -804,7 +788,6 @@ class App(ctk.CTk):
 
         self.init_monitor_tab(self.tab_frames["直播監控"])
         self.init_rules_tab(self.tab_frames["防禦規則設定"])
-        self.init_poison_pill_tab(self.tab_frames["反擊建議"])
         self.init_history_tab(self.tab_frames["歷史記錄"])
 
         self.switch_tab(self.tab_names[0])
@@ -1129,73 +1112,7 @@ class App(ctk.CTk):
         self.refresh_rules_display()
 
     # ------------------------------------------------------------------
-    # 分頁 3：反擊建議
-    # ------------------------------------------------------------------
-    def init_poison_pill_tab(self, tab):
-        header = ctk.CTkFrame(tab, fg_color="transparent")
-        header.pack(fill="x", padx=8, pady=(14, 4))
-        ctk.CTkLabel(
-            header, text="自訂反擊建議語句庫",
-            font=FONT_SECTION, text_color=ACCENT
-        ).pack(side="left")
-        info_icon(
-            header,
-            "當偵測到側翼攻擊留言時，系統有 20% 機率會從這份語句庫中\n"
-            "隨機挑一句取代原本的建議回覆（機制完全透明，取代前你都能在\n"
-            "彈出小窗看到實際要複製的文字，再自行決定要不要送出）。\n"
-            "每行一句，儲存後立即生效。",
-            side="left", padx=(10, 0)
-        )
-
-        ctk.CTkLabel(
-            tab, text="每行一句，儲存後立即套用到反擊建議語句庫。",
-            font=FONT_LABEL, text_color="#8fb3b3"
-        ).pack(anchor="w", padx=8, pady=(0, 8))
-
-        self.poison_pill_text = scrolledtext.ScrolledText(
-            tab, height=5, bg="#0a0f0f", fg="#ffe066", font=FONT_MONO, borderwidth=0,
-            spacing1=4, spacing3=4
-        )
-        self.poison_pill_text.pack(fill="x", padx=8, pady=4)
-        style_scrollbar(self.poison_pill_text)
-
-        frame_buttons = ctk.CTkFrame(tab, fg_color="transparent")
-        frame_buttons.pack(fill="x", padx=8, pady=12)
-
-        ctk.CTkButton(
-            frame_buttons, text="儲存反擊建議", command=self.save_poison_pills, font=FONT_BUTTON,
-            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a", height=44, width=180
-        ).pack(side="left", padx=4)
-
-        cloud_header = ctk.CTkFrame(tab, fg_color="transparent")
-        cloud_header.pack(fill="x", padx=8, pady=(10, 4))
-        copy_icon(
-            cloud_header, get_text=lambda: "\n".join(self.config_mgr.poison_pill_base),
-            log_callback=self.append_log_system, side="left", padx=(0, 6)
-        )
-        ctk.CTkLabel(
-            cloud_header, text="雲端預設反擊建議（唯讀預覽）",
-            font=FONT_LABEL_BOLD, text_color="#888"
-        ).pack(side="left")
-        info_icon(
-            cloud_header,
-            "這是目前從雲端同步下來的預設反擊建議語句庫預覽，\n"
-            "此區塊僅供參考，無法在此編輯；\n"
-            "上方文字框儲存後會覆蓋你本機使用的語句庫。",
-            side="left", padx=(10, 0)
-        )
-
-        self.cloud_pills_text = scrolledtext.ScrolledText(
-            tab, height=16, bg="#121818", fg="#cfcfcf",
-            font=FONT_MONO, borderwidth=0, state="disabled", spacing1=5, spacing3=5
-        )
-        self.cloud_pills_text.pack(fill="both", expand=True, padx=8, pady=(0, 10))
-        style_scrollbar(self.cloud_pills_text)
-
-        self.refresh_cloud_pills_display()
-
-    # ------------------------------------------------------------------
-    # 分頁 4：歷史記錄
+    # 分頁 3：歷史記錄
     # ------------------------------------------------------------------
     def init_history_tab(self, tab):
         header = ctk.CTkFrame(tab, fg_color="transparent")
@@ -1861,31 +1778,6 @@ class App(ctk.CTk):
         rp_box.insert("1.0", "\n".join(rule.reply_pool))
         rp_box.config(state="disabled")
         style_scrollbar(rp_box)
-
-    def save_poison_pills(self):
-        pills = [p.strip() for p in self.poison_pill_text.get("1.0", "end").split("\n") if p.strip()]
-        if not pills:
-            messagebox.showwarning("警告", "請至少輸入一條反擊建議")
-            return
-
-        cache_path = "security_cache.json"
-        data = {}
-        if os.path.exists(cache_path):
-            with open(cache_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        data["poison_pill_replies"] = pills
-        with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-
-        self.config_mgr.poison_pill_base = pills
-        messagebox.showinfo("成功", "反擊建議已儲存")
-
-    def refresh_cloud_pills_display(self):
-        self.cloud_pills_text.config(state="normal")
-        self.cloud_pills_text.delete("1.0", "end")
-        for pill in self.config_mgr.poison_pill_base:
-            self.cloud_pills_text.insert("end", f"• {pill}\n")
-        self.cloud_pills_text.config(state="disabled")
 
 
 def _remove_quarantine_on_macos():
