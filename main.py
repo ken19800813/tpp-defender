@@ -1649,6 +1649,7 @@ class App(ctk.CTk):
         text_replies.pack(padx=14, pady=4, fill="both", expand=True)
         text_replies.insert("1.0", initial_replies)
         style_scrollbar(text_replies)
+        bind_paste(text_replies)
 
         # === 分享到雲端社群資料庫（預設不勾，隱私考量：一定要使用者主動選才分享） ===
         share_var = ctk.BooleanVar(value=initial_share)
