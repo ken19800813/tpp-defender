@@ -587,6 +587,7 @@ class App(ctk.CTk):
         self.setup_ui()
         self.after(5000, self._check_ads)
         self.after(SHARE_BATCH_DELAY_MS, self._check_daily_share_batch)
+        self.after(3000, self._check_config_update)
 
     def _create_context_menu(self, widget):
         """為輸入框建立右鍵菜單"""
@@ -627,6 +628,47 @@ class App(ctk.CTk):
         實際的網路請求(抓廣告清單+抓圖片)丟到背景執行緒，避免卡住UI。"""
         threading.Thread(target=self._check_ads_worker, daemon=True).start()
         self.after(AD_POLL_INTERVAL_MS, self._check_ads)
+
+    def _check_config_update(self):
+        """啟動後背景檢查一次雲端規則庫版本號；有更新才彈提示問使用者要不要下載。
+        極輕量請求（只問版本），大多數啟動不再觸發全量 config 下載，省 Turso row reads。"""
+        threading.Thread(target=self._check_config_update_worker, daemon=True).start()
+
+    def _check_config_update_worker(self):
+        server_version = self.config_mgr.fetch_livestream_version()
+        if server_version is None:
+            return  # 網路失敗安靜結束，下次啟動再試
+        local_version = self.config_mgr.synced_config_version
+        if local_version is not None and server_version == local_version:
+            return  # 已是最新
+        # 版本不同（或本機從未記錄 version）→ 排程回主執行緒彈提示
+        self.after(0, self._prompt_config_update, server_version)
+
+    def _prompt_config_update(self, server_version):
+        if not messagebox.askyesno(
+            "規則庫更新",
+            "偵測到雲端防禦規則庫有更新，是否現在下載並套用？\n"
+            "（選「否」會繼續使用目前規則，下次開啟程式會再次詢問。）"
+        ):
+            return  # 尊重使用者，不強制
+        threading.Thread(
+            target=self._download_config_update_worker,
+            args=(server_version,), daemon=True
+        ).start()
+
+    def _download_config_update_worker(self, server_version):
+        self.config_mgr.fetch_livestream_config()
+        applied = self.config_mgr.synced_config_version
+        if applied == server_version:
+            def _ok():
+                self.config_mgr._rebuild_rules()
+                self.refresh_rules_display()
+                self.append_log_system("☁️ 規則庫已更新到最新版本")
+            self.after(0, _ok)
+        else:
+            self.after(0, lambda: self.append_log_system(
+                "☁️ 規則庫更新失敗，稍後可再試（將沿用目前規則）"
+            ))
 
     def _check_daily_share_batch(self):
         """App 連續開啟滿一小時才觸發，檢查今天是否已經分享過、

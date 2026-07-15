@@ -16,6 +16,7 @@ VERSION_INFO_FILE = "security_version.json"
 # GitHub security_rules.json 只再保留 forbidden_attack_words 跟
 # poison_pill_replies(反擊建議)兩項。
 LIVESTREAM_CONFIG_API_URL = "https://line-news-0p7m.onrender.com/api/livestream/config"
+LIVESTREAM_VERSION_API_URL = "https://line-news-0p7m.onrender.com/api/livestream/version"
 LIVESTREAM_CACHE_FILE = "livestream_cache.json"
 
 # 廣告推播：獨立於上面的設定同步之外，用比較短的輪詢間隔單獨檢查，
@@ -61,11 +62,37 @@ class ConfigManager:
         self.auto_send_enabled: bool = False
         self.last_share_date = None  # 每日分享批次上次成功嘗試的日期字串 "YYYY-MM-DD"，None 代表從未執行過
         self.seen_ad_ids = self._load_seen_ads()
+        self.synced_config_version = None  # 本機目前已套用的直播設定 version，None=從未成功下載過
 
         self.fetch_remote_rules()
-        self.fetch_livestream_config()
+        self.load_livestream_config_or_cache()
         self.load()
         self._rebuild_rules()
+
+    def load_livestream_config_or_cache(self):
+        """啟動時的省流策略：優先用本機快取秒開，只有首次安裝（無快取）
+        才做一次 bootstrap 全量下載。之後的更新改由前端主動偵測版本、
+        使用者確認後再呼叫 fetch_livestream_config()。"""
+        if os.path.exists(LIVESTREAM_CACHE_FILE):
+            self._load_livestream_from_local_cache()
+        else:
+            self.fetch_livestream_config()
+
+    def fetch_livestream_version(self):
+        """極輕量版本查詢，成功回傳 int，失敗一律回 None（吞例外）"""
+        try:
+            res = requests.get(LIVESTREAM_VERSION_API_URL, timeout=4)
+            if res.status_code != 200:
+                return None
+            data = res.json()
+            if not data.get("success"):
+                return None
+            version = data.get("version")
+            if isinstance(version, int):
+                return version
+            return None
+        except Exception:
+            return None
 
     def fetch_remote_rules(self):
         """智慧 ETag 版控：有更動才下載，否則使用本機快取秒開
@@ -120,8 +147,15 @@ class ConfigManager:
                     self.default_rules_data = data.get("default_defense_rules", [])
                     self.marquee_messages = data.get("marquee_messages", [])
                     self.marquee_speed_level = data.get("marquee_speed_level", 4)
+                    version = data.get("version")
+                    if isinstance(version, int):
+                        self.synced_config_version = version
+                    # 額外把版本號寫進 cache（用 _synced_version 這個 key，
+                    # 避免跟後端未來可能新增的 version 欄位共用同一份 payload 時混淆）
+                    cache_payload = dict(data)
+                    cache_payload["_synced_version"] = self.synced_config_version
                     with open(LIVESTREAM_CACHE_FILE, "w", encoding="utf-8") as f:
-                        json.dump(data, f, ensure_ascii=False, indent=4)
+                        json.dump(cache_payload, f, ensure_ascii=False, indent=4)
                     return
         except Exception:
             pass
@@ -137,6 +171,7 @@ class ConfigManager:
                     self.default_rules_data = data.get("default_defense_rules", [])
                     self.marquee_messages = data.get("marquee_messages", [])
                     self.marquee_speed_level = data.get("marquee_speed_level", 4)
+                    self.synced_config_version = data.get("_synced_version")
             except Exception:
                 pass
 
