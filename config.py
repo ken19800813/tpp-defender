@@ -23,6 +23,10 @@ LIVESTREAM_CACHE_FILE = "livestream_cache.json"
 LIVESTREAM_ADS_API_URL = "https://line-news-0p7m.onrender.com/api/livestream/ads/active"
 SEEN_ADS_FILE = "seen_ads.json"
 
+# 使用者自願分享自訂規則到社群資料庫的投遞端點；後端會獨立再驗一次內容
+# （黑名單/速率限制），本機驗證只是第一道防線。
+LIVESTREAM_SHARE_RULE_API_URL = "https://line-news-0p7m.onrender.com/api/livestream/rules/share"
+
 
 @dataclass
 class Rule:
@@ -211,6 +215,32 @@ class ConfigManager:
                     return False
         return True
 
+    def share_rule_to_cloud(self, trigger_keywords: List[str],
+                             reply_pool: List[str]) -> tuple:
+        """把使用者自訂規則投遞到雲端社群資料庫，讓其他使用者也能同步下載到。
+        後端會獨立再驗一次（黑名單/速率限制），驗證失敗時 error 欄位會回一段
+        中文說明；連線失敗/timeout/JSON parse 失敗一律吞掉並回統一提示，
+        呼叫端不需要 catch。回傳 (success, error_message)。"""
+        payload = {
+            "trigger_keywords": trigger_keywords,
+            "reply_pool": reply_pool,
+        }
+        try:
+            res = requests.post(
+                LIVESTREAM_SHARE_RULE_API_URL, json=payload, timeout=4
+            )
+            try:
+                data = res.json()
+            except Exception:
+                return (False, "伺服器回應格式異常，稍後可再試")
+
+            if res.status_code == 200 and data.get("success"):
+                return (True, "")
+            error_msg = data.get("error") or "伺服器暫時無法處理，稍後可再試"
+            return (False, error_msg)
+        except Exception:
+            return (False, "網路連線失敗，稍後可再試")
+
     def save(self):
         """存檔本機設定（自訂規則、全自動送出開關，雲端預設規則不寫入本機檔案）"""
         os.makedirs(os.path.dirname(self.filepath) or ".", exist_ok=True)
@@ -245,5 +275,24 @@ class ConfigManager:
     def update_rule(self, rule_id: str, updated_rule: Rule):
         """更新使用者自訂規則"""
         self.user_rules = [updated_rule if r.id == rule_id else r for r in self.user_rules]
+        self._rebuild_rules()
+        self.save()
+
+    def reorder_user_rules(self, ordered_ids: List[str]):
+        """依 ordered_ids 的順序重排 self.user_rules。
+        找不到對應 id 的忽略；self.user_rules 裡有但不在 ordered_ids 內的規則，
+        維持原相對順序附加到最後（防禦性處理，避免資料遺失）。"""
+        by_id = {r.id: r for r in self.user_rules}
+        seen = set()
+        new_rules: List[Rule] = []
+        for rid in ordered_ids:
+            if rid in by_id and rid not in seen:
+                new_rules.append(by_id[rid])
+                seen.add(rid)
+        for r in self.user_rules:
+            if r.id not in seen:
+                new_rules.append(r)
+                seen.add(r.id)
+        self.user_rules = new_rules
         self._rebuild_rules()
         self.save()

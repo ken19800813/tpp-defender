@@ -574,6 +574,7 @@ class App(ctk.CTk):
 
         self._rules_page = 0
         self._rules_page_size = 6
+        self._rules_search_query = ""
         self._history_page = 0
         self._history_page_size = 6
 
@@ -902,9 +903,15 @@ class App(ctk.CTk):
         info_icon(
             list_header,
             "雙擊任一列可查看該規則完整的關鍵字與反擊內容\n"
-            "（表格內容太長時會被截斷顯示）。",
+            "（表格內容太長時會被截斷顯示）。\n"
+            "自訂規則可按住滑鼠左鍵拖曳來調整同頁內的顯示順序。",
             side="left", padx=(10, 0)
         )
+        self.rules_search_entry = ctk.CTkEntry(
+            list_header, placeholder_text="搜尋關鍵字或回覆內容...", width=280
+        )
+        self.rules_search_entry.pack(side="right", padx=(10, 0))
+        self.rules_search_entry.bind("<KeyRelease>", self._on_rules_search_change)
 
         # 不用 expand=True，避免規則列表把分頁列擠出可視範圍外——
         # Treeview 本身的 height=列數 已經決定好高度，這裡只要橫向撐滿即可。
@@ -938,7 +945,12 @@ class App(ctk.CTk):
         self.rules_tree.tag_configure("user", foreground=ACCENT)
 
         self._rules_by_iid = {}
+        self._rules_drag_iid = None
+        self._rules_drag_range = None
         self.rules_tree.bind("<Double-1>", self._on_rule_row_double_click)
+        self.rules_tree.bind("<ButtonPress-1>", self._on_rules_tree_press)
+        self.rules_tree.bind("<B1-Motion>", self._on_rules_tree_motion)
+        self.rules_tree.bind("<ButtonRelease-1>", self._on_rules_tree_release)
 
         _, self.rules_page_label, self.rules_prev_btn, self.rules_next_btn, _ = pagination_bar(
             frame_list, self._rules_prev_page, self._rules_next_page,
@@ -965,6 +977,80 @@ class App(ctk.CTk):
         if self._rules_page < total_pages - 1:
             self._rules_page += 1
             self.refresh_rules_display()
+
+    def _on_rules_search_change(self, event=None):
+        query = self.rules_search_entry.get()
+        if query != self._rules_search_query:
+            self._rules_search_query = query
+            self._rules_page = 0
+            self.refresh_rules_display()
+
+    def _draggable_rule(self, rule):
+        """自訂且非優先的規則才能拖曳。"""
+        if rule is None:
+            return False
+        if getattr(rule, "is_priority", False):
+            return False
+        user_rule_ids = {r.id for r in self.config_mgr.user_rules}
+        return rule.id in user_rule_ids
+
+    def _on_rules_tree_press(self, event):
+        self._rules_drag_iid = None
+        self._rules_drag_range = None
+        iid = self.rules_tree.identify_row(event.y)
+        if not iid:
+            return
+        rule = self._rules_by_iid.get(iid)
+        if not self._draggable_rule(rule):
+            return
+        # 目前頁面中所有可拖曳（自訂非優先）iid 於 tree 內的 index，
+        # 拖曳目標必須夾在這些 index 的最小/最大值之間，避免拖進雲端或優先規則區塊
+        children = self.rules_tree.get_children()
+        draggable_positions = [
+            i for i, cid in enumerate(children)
+            if self._draggable_rule(self._rules_by_iid.get(cid))
+        ]
+        if not draggable_positions:
+            return
+        self._rules_drag_iid = iid
+        self._rules_drag_range = (min(draggable_positions), max(draggable_positions))
+
+    def _on_rules_tree_motion(self, event):
+        if not self._rules_drag_iid or not self._rules_drag_range:
+            return
+        target_iid = self.rules_tree.identify_row(event.y)
+        if not target_iid:
+            return
+        target_idx = self.rules_tree.index(target_iid)
+        lo, hi = self._rules_drag_range
+        target_idx = max(lo, min(hi, target_idx))
+        current_idx = self.rules_tree.index(self._rules_drag_iid)
+        if target_idx != current_idx:
+            self.rules_tree.move(self._rules_drag_iid, "", target_idx)
+
+    def _on_rules_tree_release(self, event):
+        if not self._rules_drag_iid:
+            return
+        self._rules_drag_iid = None
+        self._rules_drag_range = None
+        # 讀出目前頁面顯示順序內的自訂非優先規則 id，
+        # 再與 self.user_rules 合成完整新順序（頁面外的規則保留在原位）
+        on_page_new_order = []
+        on_page_set = set()
+        for cid in self.rules_tree.get_children():
+            rule = self._rules_by_iid.get(cid)
+            if self._draggable_rule(rule):
+                on_page_new_order.append(rule.id)
+                on_page_set.add(rule.id)
+        full_ordered = []
+        it = iter(on_page_new_order)
+        for r in self.config_mgr.user_rules:
+            if r.id in on_page_set:
+                full_ordered.append(next(it))
+            else:
+                full_ordered.append(r.id)
+        self.config_mgr.reorder_user_rules(full_ordered)
+        self.refresh_rules_display()
 
     # ------------------------------------------------------------------
     # 分頁 3：反擊建議
@@ -1118,49 +1204,79 @@ class App(ctk.CTk):
             ).pack(anchor="w", padx=12, pady=12)
             return
 
+        # 依日期分組（沿用 page_files 既有的新到舊排序，dict 保留插入順序）
+        groups = []  # [(date, [(path, data), ...]), ...]
+        group_index = {}
         for path in page_files:
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
             except Exception:
                 continue
+            date = data.get("started_at", "").split(" ")[0] or "未知日期"
+            if date not in group_index:
+                group_index[date] = len(groups)
+                groups.append((date, []))
+            groups[group_index[date]][1].append((path, data))
 
-            title = data.get("title", "未命名直播")
-            date = data.get("started_at", "").split(" ")[0]
-            messages = data.get("messages", [])
-            flagged_count = sum(1 for m in messages if m.get("flagged"))
+        for date, items in groups:
+            # 時間軸列：左側細軌道（圓點 + 直線）+ 右側該日卡片群
+            group_row = ctk.CTkFrame(self.history_scroll, fg_color="transparent")
+            group_row.pack(fill="x", padx=6, pady=(4, 0))
 
-            row = ctk.CTkFrame(self.history_scroll, fg_color=BG_PANEL, corner_radius=10)
-            row.pack(fill="x", padx=6, pady=6)
-
-            text_box = ctk.CTkFrame(row, fg_color="transparent")
-            text_box.pack(side="left", fill="x", expand=True, padx=14, pady=12)
-
-            # 標題太長會蓋住右邊的按鈕，截斷到 50 字以內
-            title_display = title if len(title) <= 50 else title[:47] + "..."
+            rail = ctk.CTkFrame(group_row, fg_color="transparent", width=32)
+            rail.pack(side="left", fill="y")
+            rail.pack_propagate(False)
             ctk.CTkLabel(
-                text_box, text=title_display, font=FONT_LABEL_BOLD,
-                text_color="#e8fdfd", anchor="w"
-            ).pack(anchor="w")
+                rail, text="●", font=FONT_LABEL_BOLD, text_color=ACCENT, width=32
+            ).pack(pady=(10, 0))
+            ctk.CTkFrame(rail, fg_color=ACCENT_DIM, width=2).pack(
+                fill="y", expand=True, pady=(2, 4)
+            )
+
+            content = ctk.CTkFrame(group_row, fg_color="transparent")
+            content.pack(side="left", fill="x", expand=True)
+
             ctk.CTkLabel(
-                text_box, text=f"{date}　留言數：{len(messages)}　側翼標記：{flagged_count}",
-                font=FONT_LABEL, text_color="#8fb3b3", anchor="w"
-            ).pack(anchor="w")
+                content, text=date, font=FONT_LABEL_BOLD, text_color=ACCENT, anchor="w"
+            ).pack(anchor="w", padx=(4, 0), pady=(8, 4))
 
-            btn_box = ctk.CTkFrame(row, fg_color="transparent")
-            btn_box.pack(side="right", padx=14, pady=12)
+            for path, data in items:
+                title = data.get("title", "未命名直播")
+                messages = data.get("messages", [])
+                flagged_count = sum(1 for m in messages if m.get("flagged"))
 
-            ctk.CTkButton(
-                btn_box, text="刪除", width=90, height=44, font=FONT_BUTTON,
-                fg_color=DANGER, hover_color="#cc3333",
-                command=lambda p=path, t=title: self.delete_history_record(p, t)
-            ).pack(side="right", padx=(8, 0))
+                row = ctk.CTkFrame(content, fg_color=BG_PANEL, corner_radius=10)
+                row.pack(fill="x", padx=(4, 6), pady=4)
 
-            ctk.CTkButton(
-                btn_box, text="查看完整記錄", width=150, height=44, font=FONT_BUTTON,
-                fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a",
-                command=lambda p=path: self.open_history_viewer(p)
-            ).pack(side="right")
+                text_box = ctk.CTkFrame(row, fg_color="transparent")
+                text_box.pack(side="left", fill="x", expand=True, padx=14, pady=12)
+
+                # 標題太長會蓋住右邊的按鈕，截斷到 50 字以內
+                title_display = title if len(title) <= 50 else title[:47] + "..."
+                ctk.CTkLabel(
+                    text_box, text=title_display, font=FONT_LABEL_BOLD,
+                    text_color="#e8fdfd", anchor="w"
+                ).pack(anchor="w")
+                ctk.CTkLabel(
+                    text_box, text=f"{date}　留言數：{len(messages)}　側翼標記：{flagged_count}",
+                    font=FONT_LABEL, text_color="#8fb3b3", anchor="w"
+                ).pack(anchor="w")
+
+                btn_box = ctk.CTkFrame(row, fg_color="transparent")
+                btn_box.pack(side="right", padx=14, pady=12)
+
+                ctk.CTkButton(
+                    btn_box, text="刪除", width=90, height=44, font=FONT_BUTTON,
+                    fg_color=DANGER, hover_color="#cc3333",
+                    command=lambda p=path, t=title: self.delete_history_record(p, t)
+                ).pack(side="right", padx=(8, 0))
+
+                ctk.CTkButton(
+                    btn_box, text="查看完整記錄", width=150, height=44, font=FONT_BUTTON,
+                    fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a",
+                    command=lambda p=path: self.open_history_viewer(p)
+                ).pack(side="right")
 
     def delete_history_record(self, path, title):
         if not messagebox.askyesno("確認刪除", f"確定要刪除這場記錄嗎？\n\n{title}\n\n此動作無法復原。"):
@@ -1392,21 +1508,20 @@ class App(ctk.CTk):
         def update_keywords_state():
             """最優先規則時，關鍵字欄變只讀+提示；否則用初始值。
             CTkEntry 在 disabled 狀態下 delete/insert 會被底層 tk Entry 拒絕、
-            靜默失敗，所以必須先切回 normal 改完內容，最後才 disable。"""
+            靜默失敗，所以必須先切回 normal 改完內容，最後才 disable。
+            另外，優先規則的關鍵字是內部佔位字串，分享到社群沒有意義，
+            所以連同分享 checkbox 一起停用並取消勾選。"""
             entry_keywords.configure(state="normal")
             entry_keywords.delete(0, "end")
             if priority_var.get():
                 entry_keywords.insert(0, "不管什麼垃圾字，所有攻擊都用此訊息回覆")
                 entry_keywords.configure(state="disabled", text_color="#999999")
+                share_var.set(False)
+                share_checkbox.configure(state="disabled")
             else:
                 entry_keywords.insert(0, initial_keywords)
                 entry_keywords.configure(text_color="#e8fdfd")
-
-        # 初始化關鍵字欄狀態（根據優先規則是否勾選）
-        update_keywords_state()
-
-        # 綁定 checkbox change 事件
-        priority_checkbox.configure(command=update_keywords_state)
+                share_checkbox.configure(state="normal")
 
         # === 反擊回應文 ===
         ctk.CTkLabel(dlg, text="反擊回應文 (每行一句):", font=FONT_LABEL).pack(anchor="w", padx=14, pady=(10, 6))
@@ -1417,6 +1532,31 @@ class App(ctk.CTk):
         text_replies.pack(padx=14, pady=4, fill="both", expand=True)
         text_replies.insert("1.0", initial_replies)
         style_scrollbar(text_replies)
+
+        # === 分享到雲端社群資料庫（預設不勾，隱私考量：一定要使用者主動選才分享） ===
+        share_var = ctk.BooleanVar(value=False)
+        share_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        share_row.pack(fill="x", padx=14, pady=(10, 0))
+        share_checkbox = ctk.CTkCheckBox(
+            share_row, text="分享這條規則到社群資料庫（其他使用者也會下載到）",
+            font=FONT_LABEL, variable=share_var,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER
+        )
+        share_checkbox.pack(side="left")
+        info_icon(
+            share_row,
+            "分享後，這條規則的關鍵字與回覆內容會加入雲端社群資料庫，\n"
+            "所有 TPPchat 使用者都會同步下載到。\n"
+            "請勿包含個資或針對特定人的人身攻擊內容，\n"
+            "違規內容會被系統自動過濾攔截。",
+            side="left", padx=(8, 0)
+        )
+
+        # 初始化關鍵字欄+分享 checkbox 狀態（share_checkbox 必須先建立才能呼叫）
+        update_keywords_state()
+
+        # 綁定 priority checkbox change 事件（也負責同步分享 checkbox 的啟用狀態）
+        priority_checkbox.configure(command=update_keywords_state)
 
         def do_save():
             # 若是最優先規則，直接用虛擬關鍵字（系統內部不會看）
@@ -1434,6 +1574,25 @@ class App(ctk.CTk):
             if not self.config_mgr.validate_custom_rule(keywords, replies):
                 messagebox.showerror("安全性錯誤", "偵測到內容包含禁用詞彙，系統已拒絕儲存！")
                 return
+
+            # 分享是額外附加的非阻塞動作：本機儲存流程照跑不誤，網路請求丟到
+            # 背景 thread，結果透過 self.after(0, ...) 排程回主執行緒安全更新 UI。
+            if share_var.get():
+                share_kw = list(keywords)
+                share_rp = list(replies)
+
+                def _share_worker():
+                    ok, err = self.config_mgr.share_rule_to_cloud(share_kw, share_rp)
+                    if ok:
+                        self.after(0, lambda: self.append_log_system(
+                            "✅ 規則已分享到社群資料庫"
+                        ))
+                    else:
+                        self.after(0, lambda e=err: self.append_log_system(
+                            f"⚠️ 分享失敗：{e}"
+                        ))
+
+                threading.Thread(target=_share_worker, daemon=True).start()
 
             on_save(keywords, replies, bool(priority_var.get()))
             dlg.destroy()
@@ -1567,9 +1726,25 @@ class App(ctk.CTk):
         def truncate(text, limit=60):
             return text if len(text) <= limit else text[:limit] + "..."
 
+        # 先套用搜尋過濾（空字串＝不過濾），再依優先層級排序
+        query = self._rules_search_query
+        if query:
+            q = query.lower()
+            def _match(rule):
+                for kw in rule.trigger_keywords:
+                    if q in kw.lower():
+                        return True
+                for rp in rule.reply_pool:
+                    if q in rp.lower():
+                        return True
+                return False
+            filtered_rules = [r for r in self.config_mgr.rules if _match(r)]
+        else:
+            filtered_rules = list(self.config_mgr.rules)
+
         # 最優先規則永遠排最前面（跨頁排序，不受編輯/新增順序影響）
         all_rules = sorted(
-            self.config_mgr.rules,
+            filtered_rules,
             key=lambda r: 0 if getattr(r, "is_priority", False) else 1
         )
         total = len(all_rules)
