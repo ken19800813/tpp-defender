@@ -1693,8 +1693,8 @@ class App(ctk.CTk):
                 messagebox.showerror("安全性錯誤", "偵測到內容包含禁用詞彙，系統已拒絕儲存！")
                 return
 
+            dlg.destroy()  # 先關閉視窗，再讓 on_save 顯示訊息，避免 messagebox 卡住
             on_save(keywords, replies, bool(priority_var.get()), bool(share_var.get()))
-            dlg.destroy()
 
         ctk.CTkButton(dlg, text="儲存規則", command=do_save, font=FONT_BUTTON, height=44,
                        fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a").pack(pady=14)
