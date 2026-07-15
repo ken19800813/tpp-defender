@@ -653,17 +653,45 @@ class App(ctk.CTk):
         self.destroy()
 
     def _create_context_menu(self, widget):
-        """為輸入框建立右鍵菜單"""
+        """為輸入框建立右鍵菜單，貼上目標固定是傳入的 widget 本身
+        （先前寫死呼叫 self._paste_url() 只會貼到直播網址欄，導致其他
+        輸入框右鍵貼上永遠貼錯地方，這裡改成通用版本）。"""
         context_menu = tk.Menu(self, tearoff=0, bg="#1c2626", fg="white")
-        context_menu.add_command(label="貼上", command=self._paste_url)
+
+        def do_context_paste():
+            text = read_clipboard(widget)
+            if not text:
+                messagebox.showwarning("提示", "剪貼簿是空的，請先複製內容")
+                return
+            try:
+                widget.delete("sel.first", "sel.last")
+            except Exception:
+                pass
+            try:
+                widget.insert("insert", text)
+            except Exception:
+                try:
+                    widget.delete(0, "end")
+                    widget.insert(0, text)
+                except Exception:
+                    pass
+
+        context_menu.add_command(label="貼上", command=do_context_paste)
 
         def show_menu(event):
             try:
                 context_menu.tk_popup(event.x_root, event.y_root)
-            except:
+            except Exception:
                 pass
+            finally:
+                try:
+                    context_menu.grab_release()
+                except Exception:
+                    pass
 
-        widget.bind("<Button-3>", show_menu)  # 右鍵
+        widget.bind("<Button-3>", show_menu)  # 右鍵（Windows/Linux）
+        widget.bind("<Button-2>", show_menu)  # macOS 部分滑鼠設定的右鍵
+        widget.bind("<Control-Button-1>", show_menu)  # macOS 觸控板 Ctrl+點擊
 
     def _setup_menu(self):
         """加入菜單欄，提供編輯功能（主要是貼上網址）"""
@@ -1621,6 +1649,7 @@ class App(ctk.CTk):
         entry_keywords = ctk.CTkEntry(dlg, height=42, font=FONT_ENTRY, placeholder_text="例: 檳榔,哭文哲")
         entry_keywords.pack(padx=14, pady=4, fill="x")
         bind_paste(entry_keywords)
+        self._create_context_menu(entry_keywords)
 
         def update_keywords_state():
             """最優先規則時，關鍵字欄變只讀+提示；否則用初始值。
@@ -1650,6 +1679,7 @@ class App(ctk.CTk):
         text_replies.insert("1.0", initial_replies)
         style_scrollbar(text_replies)
         bind_paste(text_replies)
+        self._create_context_menu(text_replies)
 
         # === 分享到雲端社群資料庫（預設不勾，隱私考量：一定要使用者主動選才分享） ===
         share_var = ctk.BooleanVar(value=initial_share)
