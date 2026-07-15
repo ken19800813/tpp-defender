@@ -573,6 +573,16 @@ class App(ctk.CTk):
         self.after(SHARE_BATCH_DELAY_MS, self._check_daily_share_batch)
         self.after(3000, self._check_config_update)
 
+        # 程式關閉時優雅關閉監控執行緒，確保日誌被存檔
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def on_closing(self):
+        """優雅關閉應用：停止監控執行緒、等待日誌存檔、再關閉視窗"""
+        if self.bot_manager.is_running():
+            self.append_log_system("正在停止監控並保存記錄，請稍候...")
+            self.bot_manager.stop()
+        self.destroy()
+
     def _create_context_menu(self, widget):
         """為輸入框建立右鍵菜單"""
         context_menu = tk.Menu(self, tearoff=0, bg="#1c2626", fg="white")

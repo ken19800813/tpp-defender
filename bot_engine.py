@@ -401,8 +401,30 @@ class YouTubeLiveTacticalBot:
                 recent_content_seen = {}
                 CONTENT_DEDUP_WINDOW = 6.0
 
+                # 追蹤上次檢查直播是否結束的時間（每 5 秒檢查一次，省 DOM 操作）
+                last_stream_check = 0.0
+                check_stream_interval = 5.0
+                consecutive_no_chat_checks = 0
+
                 while self.is_running:
                     try:
+                        # 每 5 秒檢查一次聊天室容器是否還存在（直播結束時容器會消失）
+                        now = time.time()
+                        if now - last_stream_check >= check_stream_interval:
+                            last_stream_check = now
+                            try:
+                                chat_container = self.page.query_selector("yt-live-chat-renderer")
+                                if not chat_container:
+                                    consecutive_no_chat_checks += 1
+                                    if consecutive_no_chat_checks >= 2:  # 連續 2 次（10 秒）找不到，判定直播已結束
+                                        self.ui_callback("SYSTEM", "偵測到直播已結束，正在保存記錄...")
+                                        self.is_running = False
+                                        break
+                                else:
+                                    consecutive_no_chat_checks = 0
+                            except Exception:
+                                pass
+
                         while not self.send_queue.empty():
                             queued_text = self.send_queue.get()
                             if not self._try_send(queued_text):
