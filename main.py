@@ -312,6 +312,12 @@ class NotificationPopUp(ctk.CTkToplevel):
     每個小窗只能送出一次；送出還受全域10秒冷卻限制，倒數期間按鈕會顯示秒數、
     無法點擊，嚴禁被拿來洗版聊天室。點擊送出後，會自動打字進聊天室並直接送出
     （這一步會真的公開發言）。"""
+    # 同時開著的彈窗實例清單，用來計算層疊位移，避免短時間內連續彈出
+    # 多個警示窗時全部疊在同一個座標、後面的窗完全遮住前面的窗看不到。
+    _active_popups = []
+    _CASCADE_OFFSET = 32  # 每多開一個窗，往右下角錯開的像素距離
+    _CASCADE_MAX = 6      # 錯開到第幾個之後就不再繼續位移、改回堆疊在最後一格（避免跑出螢幕）
+
     def __init__(self, parent, author, content, reply, ui_log_callback,
                  on_send=None, forbidden_words=None, cooldown_getter=None,
                  msg_id=None, moderator_mode=False, on_ban=None):
@@ -333,7 +339,12 @@ class NotificationPopUp(ctk.CTkToplevel):
 
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         w, h = 480, 340 if moderator_mode else 300
-        self.geometry(f"{w}x{h}+{sw-w-20}+{sh-h-60}")
+        slot = min(len(NotificationPopUp._active_popups), NotificationPopUp._CASCADE_MAX)
+        offset = slot * NotificationPopUp._CASCADE_OFFSET
+        x = sw - w - 20 - offset
+        y = sh - h - 60 - offset
+        self.geometry(f"{w}x{h}+{x}+{y}")
+        NotificationPopUp._active_popups.append(self)
         self.configure(fg_color="#141a1a", border_color=ACCENT, border_width=2)
 
         ctk.CTkLabel(
@@ -398,6 +409,8 @@ class NotificationPopUp(ctk.CTkToplevel):
 
     def destroy(self):
         self._alive = False
+        if self in NotificationPopUp._active_popups:
+            NotificationPopUp._active_popups.remove(self)
         super().destroy()
 
     def _get_text(self) -> str:
