@@ -84,6 +84,12 @@ class YouTubeLiveTacticalBot:
         不用另外做「是不是頻道主」的預先判斷，直接嘗試操作，選單裡
         找不到封鎖選項就直接回報「沒有權限」，這就是最準確的權限偵測
         方式（比起猜測帳號身份，直接試一次動作更可靠）。
+
+        刻意不套用 SEND_COOLDOWN_SECONDS 送出冷卻機制：冷卻是為了防止
+        「發言洗版」，封鎖是隱藏對方帳號的單向管理動作、不會產生任何
+        新留言，兩者風險性質不同，確認是頻道主本人操作時應該讓他能
+        連續處理多個側翼攻擊者，不該被送出冷卻卡住。
+
         回傳 (success: bool, message: str)。"""
         try:
             msg_el = self.page.query_selector(f'[id="{msg_id}"]')
