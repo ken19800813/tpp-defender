@@ -59,6 +59,6 @@ exe = EXE(
 app = BUNDLE(
     exe,
     name='TPPchat.app',
-    icon=None,
+    icon='TPPchat.icns',
     bundle_identifier=None,
 )
