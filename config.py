@@ -37,6 +37,8 @@ class Rule:
     is_enabled: bool = True
     is_priority: bool = False  # 最優先回覆規則：命中任何規則的關鍵字後，
     # 若存在啟用中的優先規則，回覆內容一律改用該規則，不管實際命中的是哪一條
+    wants_share: bool = False      # 使用者是否勾選要分享這條規則到社群資料庫
+    already_shared: bool = False   # 目前這條規則的內容是否已成功上傳過（編輯後會重置）
 
 
 @dataclass
@@ -57,6 +59,7 @@ class ConfigManager:
         self.marquee_messages: List[str] = []
         self.marquee_speed_level: int = 4
         self.auto_send_enabled: bool = False
+        self.last_share_date = None  # 每日分享批次上次成功嘗試的日期字串 "YYYY-MM-DD"，None 代表從未執行過
         self.seen_ad_ids = self._load_seen_ads()
 
         self.fetch_remote_rules()
@@ -194,6 +197,7 @@ class ConfigManager:
                     d = json.load(f)
                     self.user_rules = [Rule(**r) for r in d.get("rules", [])]
                     self.auto_send_enabled = d.get("auto_send_enabled", False)
+                    self.last_share_date = d.get("last_share_date")
             except Exception:
                 self.user_rules = []
         else:
@@ -249,6 +253,7 @@ class ConfigManager:
                 {
                     "rules": [asdict(r) for r in self.user_rules],
                     "auto_send_enabled": self.auto_send_enabled,
+                    "last_share_date": self.last_share_date,
                 },
                 f,
                 indent=4,

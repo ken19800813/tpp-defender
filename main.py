@@ -12,12 +12,14 @@ import subprocess
 import threading
 import webbrowser
 import requests
+from datetime import date
 from PIL import Image
 from config import ConfigManager, Rule
 from logger_thread import BotThreadManager
 from bot_engine import LOGS_DIR
 
 AD_POLL_INTERVAL_MS = 60000
+SHARE_BATCH_DELAY_MS = 60 * 60 * 1000  # 連續開啟滿一小時才檢查是否要批次分享
 
 # 廣告彈窗圖片固定寬度（配合彈窗內容寬度），高度依圖片比例自動縮放、
 # 不裁切也不設上限——彈窗本身高度會隨圖片+文字內容自動增高。
@@ -584,6 +586,7 @@ class App(ctk.CTk):
         self._setup_menu()
         self.setup_ui()
         self.after(5000, self._check_ads)
+        self.after(SHARE_BATCH_DELAY_MS, self._check_daily_share_batch)
 
     def _create_context_menu(self, widget):
         """為輸入框建立右鍵菜單"""
@@ -624,6 +627,37 @@ class App(ctk.CTk):
         實際的網路請求(抓廣告清單+抓圖片)丟到背景執行緒，避免卡住UI。"""
         threading.Thread(target=self._check_ads_worker, daemon=True).start()
         self.after(AD_POLL_INTERVAL_MS, self._check_ads)
+
+    def _check_daily_share_batch(self):
+        """App 連續開啟滿一小時才觸發，檢查今天是否已經分享過、
+        有沒有使用者勾選分享但還沒上傳的規則。只排程一次，不重複呼叫自己。"""
+        threading.Thread(target=self._daily_share_worker, daemon=True).start()
+
+    def _daily_share_worker(self):
+        today = date.today().isoformat()
+        if self.config_mgr.last_share_date == today:
+            return  # 今天已經處理過了，不管有沒有成功都不再嘗試
+
+        pending = [
+            r for r in self.config_mgr.user_rules
+            if getattr(r, "wants_share", False) and not getattr(r, "already_shared", False)
+        ]
+        if not pending:
+            return  # 沒有新內容要分享，不消耗當天的上傳額度，也不打任何 API
+
+        success_count = 0
+        for rule in pending:
+            ok, err = self.config_mgr.share_rule_to_cloud(rule.trigger_keywords, rule.reply_pool)
+            if ok:
+                rule.already_shared = True
+                success_count += 1
+
+        self.config_mgr.last_share_date = today
+        self.config_mgr.save()
+
+        self.after(0, lambda: self.append_log_system(
+            f"☁️ 每日規則分享批次完成：{success_count}/{len(pending)} 條成功上傳"
+        ))
 
     def _check_ads_worker(self):
         new_ads = self.config_mgr.fetch_new_ads()
@@ -1471,7 +1505,7 @@ class App(ctk.CTk):
     # 規則對話框
     # ------------------------------------------------------------------
     def _rule_editor_dialog(self, title, initial_keywords="", initial_replies="",
-                             initial_priority=False, on_save=None):
+                             initial_priority=False, initial_share=False, on_save=None):
         """共用的新增/編輯規則表單"""
         dlg = ctk.CTkToplevel(self)
         dlg.title(title)
@@ -1534,7 +1568,7 @@ class App(ctk.CTk):
         style_scrollbar(text_replies)
 
         # === 分享到雲端社群資料庫（預設不勾，隱私考量：一定要使用者主動選才分享） ===
-        share_var = ctk.BooleanVar(value=False)
+        share_var = ctk.BooleanVar(value=initial_share)
         share_row = ctk.CTkFrame(dlg, fg_color="transparent")
         share_row.pack(fill="x", padx=14, pady=(10, 0))
         share_checkbox = ctk.CTkCheckBox(
@@ -1545,8 +1579,9 @@ class App(ctk.CTk):
         share_checkbox.pack(side="left")
         info_icon(
             share_row,
-            "分享後，這條規則的關鍵字與回覆內容會加入雲端社群資料庫，\n"
-            "所有 TPPchat 使用者都會同步下載到。\n"
+            "勾選後，這條規則會排入每日分享批次；\n"
+            "App 連續開啟滿一小時，且當天還沒有分享過，\n"
+            "系統才會在背景把待分享的規則一次送出。\n"
             "請勿包含個資或針對特定人的人身攻擊內容，\n"
             "違規內容會被系統自動過濾攔截。",
             side="left", padx=(8, 0)
@@ -1575,40 +1610,23 @@ class App(ctk.CTk):
                 messagebox.showerror("安全性錯誤", "偵測到內容包含禁用詞彙，系統已拒絕儲存！")
                 return
 
-            # 分享是額外附加的非阻塞動作：本機儲存流程照跑不誤，網路請求丟到
-            # 背景 thread，結果透過 self.after(0, ...) 排程回主執行緒安全更新 UI。
-            if share_var.get():
-                share_kw = list(keywords)
-                share_rp = list(replies)
-
-                def _share_worker():
-                    ok, err = self.config_mgr.share_rule_to_cloud(share_kw, share_rp)
-                    if ok:
-                        self.after(0, lambda: self.append_log_system(
-                            "✅ 規則已分享到社群資料庫"
-                        ))
-                    else:
-                        self.after(0, lambda e=err: self.append_log_system(
-                            f"⚠️ 分享失敗：{e}"
-                        ))
-
-                threading.Thread(target=_share_worker, daemon=True).start()
-
-            on_save(keywords, replies, bool(priority_var.get()))
+            on_save(keywords, replies, bool(priority_var.get()), bool(share_var.get()))
             dlg.destroy()
 
         ctk.CTkButton(dlg, text="儲存規則", command=do_save, font=FONT_BUTTON, height=44,
                        fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a").pack(pady=14)
 
     def add_rule_dialog(self):
-        def on_save(keywords, replies, is_priority):
+        def on_save(keywords, replies, is_priority, wants_share):
             rule = Rule(
                 id=str(uuid.uuid4()),
                 trigger_keywords=keywords,
                 match_type="contains",
                 reply_pool=replies,
                 is_enabled=True,
-                is_priority=is_priority
+                is_priority=is_priority,
+                wants_share=wants_share,
+                already_shared=False
             )
             self.config_mgr.add_rule(rule)
             self.refresh_rules_display()
@@ -1640,14 +1658,17 @@ class App(ctk.CTk):
         def open_editor_for(rule):
             picker.destroy()
 
-            def on_save(keywords, replies, is_priority):
+            def on_save(keywords, replies, is_priority, wants_share):
+                # 編輯後一律視為新內容，重置 already_shared，讓下次批次能重新上傳
                 updated = Rule(
                     id=rule.id,
                     trigger_keywords=keywords,
                     match_type="contains",
                     reply_pool=replies,
                     is_enabled=rule.is_enabled,
-                    is_priority=is_priority
+                    is_priority=is_priority,
+                    wants_share=wants_share,
+                    already_shared=False
                 )
                 self.config_mgr.update_rule(rule.id, updated)
                 self.refresh_rules_display()
@@ -1658,6 +1679,7 @@ class App(ctk.CTk):
                 initial_keywords=", ".join(rule.trigger_keywords),
                 initial_replies="\n".join(rule.reply_pool),
                 initial_priority=getattr(rule, "is_priority", False),
+                initial_share=getattr(rule, "wants_share", False),
                 on_save=on_save
             )
 
