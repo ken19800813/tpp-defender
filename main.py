@@ -17,6 +17,7 @@ from PIL import Image
 from config import ConfigManager, Rule
 from logger_thread import BotThreadManager
 from bot_engine import LOGS_DIR
+import random
 
 AD_POLL_INTERVAL_MS = 60000
 SHARE_BATCH_DELAY_MS = 60 * 60 * 1000  # 連續開啟滿一小時才檢查是否要批次分享
@@ -642,6 +643,12 @@ class App(ctk.CTk):
         self.after(SHARE_BATCH_DELAY_MS, self._check_daily_share_batch)
         self.after(3000, self._check_config_update)
 
+        # 社群闢謠工具（Tab 4）是隱藏功能，靠 Konami Code 解鎖，
+        # 不在啟動時就建立分頁，同意條款通過後才動態加入。
+        self._konami_buffer = []
+        self._social_tab_unlocked = False
+        self.bind_all("<KeyPress>", self._on_konami_keypress)
+
         # 程式關閉時優雅關閉監控執行緒，確保日誌被存檔
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
@@ -651,6 +658,91 @@ class App(ctk.CTk):
             self.append_log_system("正在停止監控並保存記錄，請稍候...")
             self.bot_manager.stop()
         self.destroy()
+
+    # Konami Code：↑↑↓↓←→←→BA，方向鍵+英文按鍵(不分大小寫)，
+    # 解鎖隱藏的「社群闢謠」分頁。故意不做任何 UI 提示或按鈕，維持
+    # 隱藏功能的性質；每次重啟 App 都要重新輸入，不持久化解鎖狀態。
+    _KONAMI_SEQUENCE = ["Up", "Up", "Down", "Down", "Left", "Right", "Left", "Right", "b", "a"]
+
+    def _on_konami_keypress(self, event):
+        if self._social_tab_unlocked:
+            return
+        keysym = event.keysym
+        key = keysym if keysym in ("Up", "Down", "Left", "Right") else keysym.lower()
+        self._konami_buffer.append(key)
+        self._konami_buffer = self._konami_buffer[-len(self._KONAMI_SEQUENCE):]
+        if self._konami_buffer == self._KONAMI_SEQUENCE:
+            self._konami_buffer = []
+            self._show_social_tool_consent()
+
+    def _show_social_tool_consent(self):
+        """Konami Code 觸發後的同意條款彈窗，同意才會動態加入 Tab 4"""
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("社群闢謠工具")
+        dlg.geometry("520x420")
+        dlg.attributes("-topmost", True)
+
+        ctk.CTkLabel(
+            dlg, text="⚠️ 使用條款", font=FONT_SECTION, text_color=DANGER
+        ).pack(pady=(20, 10))
+
+        body = (
+            "本功能會協助你批次整理 Facebook / Threads 貼文下的留言，\n"
+            "並協助你（或你的粉絲）分批發送澄清回覆。\n\n"
+            "Facebook / Threads 服務條款禁止自動化行為，使用本工具有\n"
+            "帳號風險，可能遭遇：發言受限、臨時停權、永久停權。\n\n"
+            "✓ 我已了解上述風險\n"
+            "✓ 我同意承擔帳號可能被停權的後果\n"
+            "✓ 我保證僅用於闢謠澄清，不用於人身攻擊或散布不實訊息"
+        )
+        ctk.CTkLabel(
+            dlg, text=body, font=FONT_LABEL, justify="left", wraplength=460
+        ).pack(padx=20, pady=(0, 16))
+
+        agree_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            dlg, text="我已閱讀並同意上述條款", variable=agree_var,
+            font=FONT_LABEL, fg_color=ACCENT, hover_color=ACCENT_HOVER
+        ).pack(pady=(0, 16))
+
+        btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        btn_row.pack(pady=(0, 10))
+
+        def do_agree():
+            if not agree_var.get():
+                messagebox.showwarning("提示", "請先勾選「我已閱讀並同意上述條款」")
+                return
+            dlg.destroy()
+            self._unlock_social_tab()
+
+        ctk.CTkButton(btn_row, text="取消", command=dlg.destroy, font=FONT_BUTTON,
+                       fg_color="#444", hover_color="#555", width=140).pack(side="left", padx=8)
+        ctk.CTkButton(btn_row, text="同意，開啟功能", command=do_agree, font=FONT_BUTTON,
+                       fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a", width=160).pack(side="left", padx=8)
+
+    def _unlock_social_tab(self):
+        """動態加入第四個分頁按鈕與內容區，跟啟動時就存在的三個分頁共用
+        同一套 switch_tab() 顯示切換機制。"""
+        if self._social_tab_unlocked:
+            return
+        self._social_tab_unlocked = True
+
+        name = "社群闢謠"
+        self.tab_names.append(name)
+        btn = ctk.CTkButton(
+            self._tab_btn_row, text=name, font=FONT_TAB, height=46, width=180,
+            corner_radius=8, border_width=0,
+            fg_color="transparent", hover_color="#243333", text_color="#9fd9d9",
+            command=lambda n=name: self.switch_tab(n)
+        )
+        btn.pack(side="left", padx=4)
+        self.tab_buttons[name] = btn
+
+        frame = ctk.CTkFrame(self._tab_content_container, fg_color="transparent")
+        self.tab_frames[name] = frame
+        self.init_social_tab(frame)
+
+        self.switch_tab(name)
 
     def _create_context_menu(self, widget):
         """為輸入框建立右鍵菜單，貼上目標固定是傳入的 widget 本身
@@ -890,6 +982,7 @@ class App(ctk.CTk):
 
         btn_row = ctk.CTkFrame(tab_bar, fg_color="transparent")
         btn_row.pack(side="left", padx=8, pady=8)
+        self._tab_btn_row = btn_row  # 供 Konami Code 解鎖時動態加按鈕
 
         self.tab_names = ["直播監控", "防禦規則設定", "歷史記錄"]
         self.tab_buttons = {}
@@ -919,6 +1012,7 @@ class App(ctk.CTk):
 
         content_container = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=10)
         content_container.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+        self._tab_content_container = content_container  # 供 Konami Code 解鎖時動態加分頁
 
         for name in self.tab_names:
             frame = ctk.CTkFrame(content_container, fg_color="transparent")
@@ -1327,6 +1421,192 @@ class App(ctk.CTk):
         )
 
         self.refresh_history_list()
+
+    # ------------------------------------------------------------------
+    # 分頁 4（隱藏）：社群闢謠工具（Facebook / Threads）
+    # ------------------------------------------------------------------
+    def init_social_tab(self, tab):
+        header = ctk.CTkFrame(tab, fg_color="transparent")
+        header.pack(fill="x", padx=8, pady=(14, 6))
+        ctk.CTkLabel(header, text="社群闢謠工具", font=FONT_SECTION).pack(side="left")
+        info_icon(
+            header,
+            "貼上 Facebook 或 Threads 貼文網址，掃描該貼文下的全部留言。\n"
+            "命中防禦規則關鍵字的留言會以紅字標示，並自動預填建議回覆\n"
+            "（可編輯）；未命中的留言維持一般顏色，你也可以自行填寫回覆。\n\n"
+            "掃描需要你已經在工具專用的 Chrome 視窗登入 Facebook/Threads\n"
+            "帳號（跟啟動直播監控時開的是同一個瀏覽器視窗）。",
+            side="left", padx=(10, 0)
+        )
+
+        url_row = ctk.CTkFrame(tab, fg_color="transparent")
+        url_row.pack(fill="x", padx=8, pady=(4, 8))
+        self.social_url_entry = ctk.CTkEntry(
+            url_row, height=42, font=FONT_ENTRY,
+            placeholder_text="貼上 Facebook 或 Threads 貼文網址"
+        )
+        self.social_url_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        bind_paste(self.social_url_entry)
+        self._create_context_menu(self.social_url_entry)
+
+        self.social_scan_btn = ctk.CTkButton(
+            url_row, text="掃描留言", command=self._start_social_scan, font=FONT_BUTTON,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a", height=42, width=140
+        )
+        self.social_scan_btn.pack(side="left")
+
+        self.social_status_label = ctk.CTkLabel(
+            tab, text="尚未掃描", font=FONT_LABEL, text_color="#888"
+        )
+        self.social_status_label.pack(anchor="w", padx=8, pady=(0, 6))
+
+        self.social_list_scroll = ctk.CTkScrollableFrame(
+            tab, fg_color="#0f1515",
+            scrollbar_fg_color=SCROLL_TROUGH, scrollbar_button_color=SCROLL_BG,
+            scrollbar_button_hover_color=ACCENT_DIM
+        )
+        self.social_list_scroll.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+
+        self.social_submit_btn = ctk.CTkButton(
+            tab, text="確認並送出待發清單", command=self._submit_social_replies, font=FONT_BUTTON,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="#0a0a0a", height=44, state="disabled"
+        )
+        self.social_submit_btn.pack(fill="x", padx=8, pady=(0, 10))
+
+        self._social_comment_rows = []  # 每則留言對應的 UI 元件與資料
+
+    def _start_social_scan(self):
+        """背景執行緒掃描留言，避免卡住 UI（Playwright 操作可能要花數秒~數十秒）"""
+        url = self.social_url_entry.get().strip()
+        if not url:
+            messagebox.showerror("錯誤", "請先輸入 Facebook 或 Threads 貼文網址")
+            return
+
+        import social_engine
+        if not social_engine.detect_platform(url):
+            messagebox.showerror("錯誤", "無法辨識網址平台，僅支援 Facebook 或 Threads 貼文網址")
+            return
+
+        self.social_scan_btn.configure(text="掃描中...", state="disabled")
+        self.social_submit_btn.configure(state="disabled")
+        for widget in self.social_list_scroll.winfo_children():
+            widget.destroy()
+        self._social_comment_rows = []
+        self.social_status_label.configure(text="掃描中，請稍候...")
+
+        def scan_worker():
+            def ui_log(msg_type, data):
+                self.after(0, lambda: self.social_status_label.configure(text=str(data)))
+
+            try:
+                comments = social_engine.scan_post_comments(url, ui_log)
+            except Exception as e:
+                comments = []
+                self.after(0, lambda: messagebox.showerror("掃描失敗", str(e)[:200]))
+            self.after(0, lambda: self._on_social_scan_done(comments))
+
+        threading.Thread(target=scan_worker, daemon=True).start()
+
+    def _match_rule_for_comment(self, content: str):
+        """比對留言內容命中哪條防禦規則，回傳 (matched: bool, suggested_reply: str)。
+        命中多條規則時取第一條命中的，回覆內容從該規則的 reply_pool 隨機挑一句，
+        跟聊天室側翼攻擊彈窗的邏輯一致。"""
+        for rule in self.config_mgr.rules:
+            if not rule.is_enabled or getattr(rule, "is_priority", False):
+                continue
+            for kw in rule.trigger_keywords:
+                if kw and kw in content:
+                    reply = random.choice(rule.reply_pool) if rule.reply_pool else ""
+                    return True, reply
+        return False, ""
+
+    def _on_social_scan_done(self, comments):
+        self.social_scan_btn.configure(text="掃描留言", state="normal")
+        if not comments:
+            self.social_status_label.configure(text="沒有掃描到留言，或掃描失敗")
+            return
+
+        self.social_status_label.configure(text=f"共 {len(comments)} 則留言（紅字為命中關鍵字）")
+
+        for idx, c in enumerate(comments):
+            matched, suggested_reply = self._match_rule_for_comment(c["content"])
+
+            row = ctk.CTkFrame(self.social_list_scroll, fg_color="#161b1b", corner_radius=6)
+            row.pack(fill="x", padx=4, pady=4)
+
+            top_line = ctk.CTkFrame(row, fg_color="transparent")
+            top_line.pack(fill="x", padx=10, pady=(8, 2))
+            ctk.CTkLabel(
+                top_line, text=c["author"], font=FONT_LABEL_BOLD, text_color=ACCENT
+            ).pack(side="left")
+
+            content_color = DANGER if matched else LOG_WHITE
+            content_label = ctk.CTkLabel(
+                row, text=c["content"], font=FONT_LABEL, text_color=content_color,
+                wraplength=800, justify="left", anchor="w"
+            )
+            content_label.pack(fill="x", padx=10, pady=(0, 6))
+
+            reply_row = ctk.CTkFrame(row, fg_color="transparent")
+            reply_row.pack(fill="x", padx=10, pady=(0, 8))
+            skip_var = ctk.BooleanVar(value=not matched)  # 未命中的預設不勾選送出
+            ctk.CTkCheckBox(
+                reply_row, text="送出", variable=skip_var, font=FONT_LABEL, width=60,
+                fg_color=ACCENT, hover_color=ACCENT_HOVER
+            ).pack(side="left", padx=(0, 8))
+            reply_entry = ctk.CTkEntry(reply_row, font=FONT_ENTRY, placeholder_text="回覆內容（可編輯）")
+            reply_entry.pack(side="left", fill="x", expand=True)
+            if suggested_reply:
+                reply_entry.insert(0, suggested_reply)
+            bind_paste(reply_entry)
+            self._create_context_menu(reply_entry)
+
+            self._social_comment_rows.append({
+                "author": c["author"],
+                "content": c["content"],
+                "matched": matched,
+                "send_var": skip_var,
+                "reply_entry": reply_entry,
+            })
+
+        self.social_submit_btn.configure(state="normal")
+
+    def _submit_social_replies(self):
+        """逐列跑髒話檢查，通過才視為可送出。目前只做到『確認清單』這一步，
+        實際批次發送（19分鐘/批的本機排程佇列）尚未實作——需要先用登入
+        帳號實測 Facebook/Threads 的回覆按鈕與輸入框結構才能安全串接，
+        避免用猜測的 selector 在正式環境靜默失敗。"""
+        to_send = [r for r in self._social_comment_rows if r["send_var"].get()]
+        if not to_send:
+            messagebox.showwarning("提示", "沒有勾選任何要送出的回覆")
+            return
+
+        errors = []
+        valid_rows = []
+        for r in to_send:
+            reply_text = r["reply_entry"].get().strip()
+            if not reply_text:
+                continue
+            is_valid, err_msg = self.config_mgr.validate_custom_rule([], [reply_text])
+            if not is_valid:
+                errors.append(f"「{r['author']}」的回覆：{err_msg}")
+            else:
+                valid_rows.append((r, reply_text))
+
+        if errors:
+            messagebox.showerror("髒話檢查未通過", "以下回覆被擋下，請修改後再送出：\n\n" + "\n".join(errors))
+            return
+
+        if not valid_rows:
+            messagebox.showwarning("提示", "沒有可送出的回覆內容")
+            return
+
+        messagebox.showinfo(
+            "確認清單已通過檢查",
+            f"共 {len(valid_rows)} 筆回覆通過髒話檢查，待送出。\n\n"
+            "本機排程佇列（每批5則、間隔19分鐘自動發送）尚在開發中，\n"
+            "會在下一階段完成後串接這份清單。"
+        )
 
     def _history_change_page_size(self, size):
         self._history_page_size = size
