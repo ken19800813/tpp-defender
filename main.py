@@ -1,6 +1,6 @@
 import customtkinter as ctk
 import tkinter as tk
-from tkinter import messagebox, scrolledtext, ttk
+from tkinter import messagebox, scrolledtext, ttk, filedialog
 import pyperclip
 import uuid
 import os
@@ -1126,6 +1126,13 @@ class App(ctk.CTk):
         ctk.CTkButton(frame_buttons, text="刪除規則", command=self.delete_rule_dialog, font=FONT_BUTTON,
                        fg_color="#444", hover_color="#555", height=44).pack(side="left", padx=4, fill="x", expand=True)
 
+        frame_excel = ctk.CTkFrame(tab, fg_color="transparent")
+        frame_excel.pack(fill="x", padx=8, pady=(0, 8))
+        ctk.CTkButton(frame_excel, text="📥 下載規則範本", command=self.download_rule_template, font=FONT_BUTTON,
+                       fg_color="#2d5a5a", hover_color="#3a7373", height=38).pack(side="left", padx=4, fill="x", expand=True)
+        ctk.CTkButton(frame_excel, text="📤 從 Excel 匯入", command=self.import_rules_from_excel_dialog, font=FONT_BUTTON,
+                       fg_color="#2d5a5a", hover_color="#3a7373", height=38).pack(side="left", padx=4, fill="x", expand=True)
+
         frame_list = ctk.CTkFrame(tab, fg_color="transparent")
         frame_list.pack(fill="both", expand=True, padx=8, pady=(10, 8))
 
@@ -1779,6 +1786,112 @@ class App(ctk.CTk):
             messagebox.showinfo("成功", "規則已新增")
 
         self._rule_editor_dialog("新增規則", on_save=on_save)
+
+    def download_rule_template(self):
+        """匯出防禦規則 Excel 範本，讓使用者照格式離線填寫後再上傳匯入"""
+        save_path = filedialog.asksaveasfilename(
+            title="下載規則範本",
+            defaultextension=".xlsx",
+            initialfile="防禦規則範本.xlsx",
+            filetypes=[("Excel 檔案", "*.xlsx")]
+        )
+        if not save_path:
+            return
+        try:
+            self.config_mgr.export_rule_template(save_path)
+            messagebox.showinfo("成功", f"範本已儲存：\n{save_path}")
+        except Exception as e:
+            messagebox.showerror("錯誤", f"範本產生失敗：{e}")
+
+    def import_rules_from_excel_dialog(self):
+        """從使用者填好的 Excel 匯入規則。流程：
+        1. 選檔、解析
+        2. 逐列跑髒話檢查（跟手動新增規則同一套 validate_custom_rule）
+        3. 彈出確認清單，列出成功/被擋下/格式錯誤的統計
+        4. 使用者確認後才真正寫入，並依每列「是否分享到社群」勾選逐筆處理
+        全程不靜默失敗——每一列被擋下的原因都要讓使用者看得到，不能糊裡糊塗漏掉。"""
+        file_path = filedialog.askopenfilename(
+            title="選擇要匯入的規則 Excel",
+            filetypes=[("Excel 檔案", "*.xlsx")]
+        )
+        if not file_path:
+            return
+
+        try:
+            parsed_rows = self.config_mgr.import_rules_from_excel(file_path)
+        except Exception as e:
+            messagebox.showerror("錯誤", f"讀取 Excel 失敗：{e}\n請確認格式與下載的範本一致。")
+            return
+
+        if not parsed_rows:
+            messagebox.showwarning("提示", "這個檔案沒有可匯入的內容")
+            return
+
+        # 逐列做髒話檢查，分類成：可匯入 / 格式錯誤 / 髒話被擋
+        importable, format_errors, blocked = [], [], []
+        for row in parsed_rows:
+            if row["error"]:
+                format_errors.append(row)
+                continue
+            is_valid, err_msg = self.config_mgr.validate_custom_rule(row["keywords"], row["replies"])
+            if not is_valid:
+                row["error"] = err_msg
+                blocked.append(row)
+                continue
+            importable.append(row)
+
+        summary_lines = [
+            f"總共解析 {len(parsed_rows)} 列",
+            f"✅ 可匯入：{len(importable)} 筆",
+        ]
+        if format_errors:
+            summary_lines.append(f"⚠️ 格式錯誤（略過）：{len(format_errors)} 筆")
+            for r in format_errors[:5]:
+                summary_lines.append(f"   第 {r['row']} 列：{r['error']}")
+            if len(format_errors) > 5:
+                summary_lines.append(f"   ...還有 {len(format_errors) - 5} 筆")
+        if blocked:
+            summary_lines.append(f"⛔ 髒話/禁用詞被擋下（略過）：{len(blocked)} 筆")
+            for r in blocked[:5]:
+                summary_lines.append(f"   第 {r['row']} 列：{r['error']}")
+            if len(blocked) > 5:
+                summary_lines.append(f"   ...還有 {len(blocked) - 5} 筆")
+
+        if not importable:
+            messagebox.showwarning("沒有可匯入的規則", "\n".join(summary_lines))
+            return
+
+        summary_lines.append(f"\n是否確認匯入這 {len(importable)} 筆規則？")
+        if not messagebox.askyesno("匯入前確認", "\n".join(summary_lines)):
+            return
+
+        share_count, fail_share_count = 0, 0
+        for row in importable:
+            rule = Rule(
+                id=str(uuid.uuid4()),
+                trigger_keywords=row["keywords"],
+                match_type="contains",
+                reply_pool=row["replies"],
+                is_enabled=True,
+                is_priority=row["is_priority"],
+                wants_share=row["wants_share"],
+                already_shared=False
+            )
+            self.config_mgr.add_rule(rule)
+            if row["wants_share"]:
+                success, _ = self.config_mgr.share_rule_to_cloud(row["keywords"], row["replies"])
+                if success:
+                    share_count += 1
+                else:
+                    fail_share_count += 1
+
+        self.refresh_rules_display()
+        result_msg = f"已匯入 {len(importable)} 筆規則"
+        if share_count:
+            result_msg += f"，其中 {share_count} 筆已排入分享"
+        if fail_share_count:
+            result_msg += f"（{fail_share_count} 筆分享失敗，已保留在本機）"
+        messagebox.showinfo("匯入完成", result_msg)
 
     def edit_rule_dialog(self):
         """直接編輯既有的自訂規則，不需要先刪除"""

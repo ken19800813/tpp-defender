@@ -1,9 +1,14 @@
 import json
 import os
 import base64
+import uuid
 import requests
 from dataclasses import dataclass, asdict
 from typing import List
+from openpyxl import Workbook, load_workbook
+
+# Excel 規則範本欄位順序（下載範本與上傳解析都依照此順序，改動時兩邊要同步）
+EXCEL_HEADERS = ["關鍵字", "回應文1", "回應文2", "回應文3", "是否為最優先規則", "是否分享到社群"]
 
 # GitHub URL Base64編碼（防止易被解讀）- ken19800813/tpp-defender
 REMOTE_SECURITY_URL_B64 = "aHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNvbnRlbnQuY29tL2tlbjE5ODAwODEzL3RwcC1kZWZlbmRlci9tYWluL3NlY3VyaXR5X3J1bGVzLmpzb24="
@@ -308,6 +313,72 @@ class ConfigManager:
         """開關頻道主/版主模式（決定側翼攻擊彈窗是否顯示封鎖按鈕），持久化"""
         self.moderator_mode = enabled
         self.save()
+
+    def export_rule_template(self, save_path: str):
+        """產生防禦規則 Excel 範本，帶表頭與範例列，方便使用者照格式填寫。
+        欄位順序固定為 EXCEL_HEADERS，跟 import_rules_from_excel() 的解析順序
+        必須保持一致，改任一邊都要同步改另一邊。"""
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "防禦規則"
+        ws.append(EXCEL_HEADERS)
+        ws.append(["貪污犯,貪污,索賄", "講到貪污，那你一定很討厭貪污的人吧", "", "", "否", "否"])
+        ws.append(["檳榔,哭文哲", "這句話跟事實不符喔", "我們可以理性討論", "", "否", "否"])
+        for col_idx in range(1, len(EXCEL_HEADERS) + 1):
+            ws.column_dimensions[chr(64 + col_idx)].width = 30
+        wb.save(save_path)
+
+    def import_rules_from_excel(self, file_path: str) -> List[dict]:
+        """讀取使用者填好的 Excel，逐列解析成規則候選清單，回傳給呼叫端
+        （main.py）逐筆做髒話檢查、UI 確認、決定是否分享後再真正呼叫
+        add_rule()。這裡只負責解析格式，不寫入、不驗證禁用詞——驗證是
+        呼叫端的責任，因為呼叫端才知道要怎麼呈現錯誤給使用者看。
+
+        回傳格式：每列一個 dict：
+        {
+            "row": 該列在 Excel 的實際行號(從2開始，1是表頭)，
+            "keywords": [str,...],
+            "replies": [str,...],
+            "is_priority": bool,
+            "wants_share": bool,
+            "error": str 或 None（若解析失敗，keywords/replies 會是空的）
+        }
+        空白列（關鍵字與所有回應文皆空）直接略過，不放進回傳清單。"""
+        wb = load_workbook(file_path, read_only=True, data_only=True)
+        ws = wb.active
+        results = []
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            if row is None:
+                continue
+            padded = list(row) + [None] * (len(EXCEL_HEADERS) - len(row))
+            raw_keywords, raw_r1, raw_r2, raw_r3, raw_priority, raw_share = padded[:6]
+
+            keywords_str = str(raw_keywords).strip() if raw_keywords else ""
+            replies = [str(r).strip() for r in (raw_r1, raw_r2, raw_r3) if r and str(r).strip()]
+
+            if not keywords_str and not replies:
+                continue  # 整列空白，略過不當錯誤
+
+            keywords = [k.strip() for k in keywords_str.split(",") if k.strip()]
+            is_priority = str(raw_priority).strip() == "是" if raw_priority else False
+            wants_share = str(raw_share).strip() == "是" if raw_share else False
+
+            error = None
+            if not keywords and not is_priority:
+                error = "關鍵字欄位是空的"
+            elif not replies:
+                error = "至少需要填一句回應文"
+
+            results.append({
+                "row": row_idx,
+                "keywords": keywords,
+                "replies": replies,
+                "is_priority": is_priority,
+                "wants_share": wants_share,
+                "error": error,
+            })
+        wb.close()
+        return results
 
     def add_rule(self, rule: Rule):
         """新增使用者自訂規則"""
