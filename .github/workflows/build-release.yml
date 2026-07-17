@@ -110,11 +110,21 @@ jobs:
           echo "=== Final release files ==="
           ls -lah ./release/final/
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: ./release/final/*
-          draft: false
-          prerelease: false
+      - name: Create or update Release
+        # 改用 GitHub 官方 gh CLI 上傳（runner 內建），取代
+        # softprops/action-gh-release@v1。後者上傳中文檔名附件時會把
+        # 「安裝說明.txt」錯誤命名成「default.txt」（GitHub Release
+        # assets API 對非 ASCII 檔名的編碼處理在該 action 版本有問題），
+        # gh CLI 對 UTF-8 檔名的處理正確、穩定，是官方工具不會有這問題。
+        # 用 `gh release view` 判斷 tag 是否已有 Release：已存在就用
+        # --clobber 覆蓋附件（同一 tag 重跑不會失敗），不存在才新建。
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$TAG" ./release/final/* --repo "${{ github.repository }}" --clobber
+          else
+            gh release create "$TAG" ./release/final/* --repo "${{ github.repository }}" \
+              --title "$TAG" --generate-notes
+          fi
