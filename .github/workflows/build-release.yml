@@ -110,21 +110,24 @@ jobs:
           echo "=== Final release files ==="
           ls -lah ./release/final/
 
-      - name: Create or update Release
+      - name: Create Release
         # 改用 GitHub 官方 gh CLI 上傳（runner 內建），取代
         # softprops/action-gh-release@v1。後者上傳中文檔名附件時會把
         # 「安裝說明.txt」錯誤命名成「default.txt」（GitHub Release
         # assets API 對非 ASCII 檔名的編碼處理在該 action 版本有問題），
         # gh CLI 對 UTF-8 檔名的處理正確、穩定，是官方工具不會有這問題。
-        # 用 `gh release view` 判斷 tag 是否已有 Release：已存在就用
-        # --clobber 覆蓋附件（同一 tag 重跑不會失敗），不存在才新建。
+        #
+        # 先前用 `gh release view` 判斷有沒有既有 Release 再決定
+        # upload/create，實測該判斷分支出現不明原因的失效（job 顯示
+        # 成功，但完全沒有 Release 被建立，Tags 頁面顯示「Create
+        # release from tag」代表 Release 物件根本不存在）。改成不猜測、
+        # 直接每次都先刪除舊 Release（不存在就忽略錯誤，靠 || true
+        # 讓指令不中斷腳本）、再無條件重新建立，避免任何模糊判斷分支。
+        # --cleanup-tag 預設不會帶，所以只刪 Release 物件、不動 tag。
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ github.ref_name }}"
-          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release upload "$TAG" ./release/final/* --repo "${{ github.repository }}" --clobber
-          else
-            gh release create "$TAG" ./release/final/* --repo "${{ github.repository }}" \
-              --title "$TAG" --generate-notes
-          fi
+          gh release delete "$TAG" --repo "${{ github.repository }}" --yes 2>/dev/null || true
+          gh release create "$TAG" ./release/final/* --repo "${{ github.repository }}" \
+            --title "$TAG" --generate-notes
