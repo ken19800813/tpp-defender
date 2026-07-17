@@ -6,6 +6,7 @@ import requests
 from dataclasses import dataclass, asdict
 from typing import List
 from openpyxl import Workbook, load_workbook
+from openpyxl.worksheet.datavalidation import DataValidation
 
 # Excel 規則範本欄位順序（下載範本與上傳解析都依照此順序，改動時兩邊要同步）
 EXCEL_HEADERS = ["關鍵字", "回應文1", "回應文2", "回應文3", "是否為最優先規則", "是否分享到社群"]
@@ -326,6 +327,22 @@ class ConfigManager:
         ws.append(["檳榔,哭文哲", "這句話跟事實不符喔", "我們可以理性討論", "", "否", "否"])
         for col_idx in range(1, len(EXCEL_HEADERS) + 1):
             ws.column_dimensions[chr(64 + col_idx)].width = 30
+
+        # 「是否為最優先規則」「是否分享到社群」欄位（E、F）改成下拉選單，
+        # 只能選「是」/「否」，避免使用者手動輸入時打錯字（例如「Y」「有」）
+        # 導致 import_rules_from_excel() 用 == "是" 判斷時誤判成否。
+        # 範圍留到第 1000 列，讓使用者自己新增列時也還在下拉選單涵蓋範圍內。
+        yes_no_validation_e = DataValidation(
+            type="list", formula1='"是,否"', allow_blank=True, showDropDown=False
+        )
+        yes_no_validation_f = DataValidation(
+            type="list", formula1='"是,否"', allow_blank=True, showDropDown=False
+        )
+        ws.add_data_validation(yes_no_validation_e)
+        ws.add_data_validation(yes_no_validation_f)
+        yes_no_validation_e.add(f"E2:E1000")
+        yes_no_validation_f.add(f"F2:F1000")
+
         wb.save(save_path)
 
     def import_rules_from_excel(self, file_path: str) -> List[dict]:

@@ -73,12 +73,16 @@ def style_scrollbar(widget):
 
 
 def bring_chat_browser_to_front():
-    """把監看用的瀏覽器視窗帶到最前面，方便直接貼上回覆（僅macOS，其他平台靜默跳過）"""
+    """把監看用的瀏覽器視窗帶到最前面，方便直接貼上回覆（僅macOS，其他平台靜默跳過）。
+    _find_system_chrome() 找到並啟動的實際是『Google Chrome』(見 bot_engine.py)，
+    不是 Chromium——先前這裡寫成 "Chromium" 導致 AppleScript activate 對不上
+    應用程式名稱，永遠不會真的把視窗帶到最前面，是個一直存在但沒被發現的
+    死代碼（呼叫了但沒作用，也不會報錯）。"""
     if sys.platform != "darwin":
         return
     try:
         subprocess.run(
-            ["osascript", "-e", 'tell application "Chromium" to activate'],
+            ["osascript", "-e", 'tell application "Google Chrome" to activate'],
             timeout=2, capture_output=True
         )
     except Exception:
@@ -175,6 +179,87 @@ def bind_paste(entry):
 
     for seq in ("<Control-v>", "<Control-V>", "<Command-v>", "<Command-V>", "<<Paste>>"):
         entry.bind(seq, do_paste)
+    return entry
+
+
+def _get_selection_text(widget):
+    """取得 widget 目前選取的文字，Entry 跟 Text 的選取讀法不同，兩種都試。"""
+    try:
+        return widget.selection_get()  # Entry/Text 都支援這個系統剪貼選取讀法
+    except Exception:
+        pass
+    try:
+        return widget.get("sel.first", "sel.last")
+    except Exception:
+        return None
+
+
+def bind_copy(entry):
+    """接管 Ctrl+C / Cmd+C 複製，綁在輸入框本身——同一批 CTk 複合元件
+    讓選單的 <<Copy>> 虛擬事件轉發不可靠的問題（見 bind_select_all
+    註解），複製也一併補上直接綁定。"""
+    def do_copy(event=None):
+        text = _get_selection_text(entry)
+        if text:
+            try:
+                pyperclip.copy(text)
+            except Exception:
+                pass
+        return "break"
+
+    for seq in ("<Control-c>", "<Control-C>", "<Command-c>", "<Command-C>", "<<Copy>>"):
+        entry.bind(seq, do_copy)
+    return entry
+
+
+def bind_cut(entry):
+    """接管 Ctrl+X / Cmd+X 剪下，綁在輸入框本身，理由同 bind_copy。"""
+    def do_cut(event=None):
+        text = _get_selection_text(entry)
+        if text:
+            try:
+                pyperclip.copy(text)
+            except Exception:
+                pass
+            try:
+                entry.delete("sel.first", "sel.last")
+            except Exception:
+                pass
+        return "break"
+
+    for seq in ("<Control-x>", "<Control-X>", "<Command-x>", "<Command-X>", "<<Cut>>"):
+        entry.bind(seq, do_cut)
+    return entry
+
+
+def bind_select_all(entry):
+    """接管 Ctrl+A / Cmd+A 全選，綁在輸入框本身——理由跟 bind_paste 一樣：
+    全選先前只靠選單列的 <<SelectAll>> 虛擬事件轉發給目前焦點元件
+    （見 _setup_menu 註解），但 CTkEntry/CTkTextbox 都是複合元件（外層
+    frame 包一個真正的內部 tk 元件），event_generate 在外層元件上發的
+    虛擬事件不會自動傳進內部子元件，導致選單那條路不可靠。
+
+    單行（CTkEntry/tk.Entry）跟多行（CTkTextbox/tk.Text）的全選 API不同：
+    Entry 用 select_range(0,"end")+icursor("end")；Text 用
+    tag_add("sel","1.0","end")+mark_set("insert","end")。兩種都試，
+    哪種可用就用哪種，讓這個函式同時相容單行輸入框跟多行文字框
+    （例如側翼攻擊回覆彈窗的 CTkTextbox）。"""
+    def do_select_all(event=None):
+        try:
+            entry.select_range(0, "end")
+            entry.icursor("end")
+            return "break"
+        except Exception:
+            pass
+        try:
+            entry.tag_add("sel", "1.0", "end")
+            entry.mark_set("insert", "end")
+        except Exception:
+            pass
+        return "break"
+
+    for seq in ("<Control-a>", "<Control-A>", "<Command-a>", "<Command-A>", "<<SelectAll>>"):
+        entry.bind(seq, do_select_all)
     return entry
 
 
@@ -381,6 +466,10 @@ class NotificationPopUp(ctk.CTkToplevel):
         self.reply_box.pack(fill="x", padx=16, pady=(4, 4))
         self.reply_box.insert("1.0", reply)
         self.reply_box.bind("<KeyRelease>", self._refresh_button_state)
+        bind_paste(self.reply_box)
+        bind_select_all(self.reply_box)
+        bind_copy(self.reply_box)
+        bind_cut(self.reply_box)
 
         self.warning_label = ctk.CTkLabel(
             self, text="", font=("Arial", 13, "bold"), text_color=DANGER
@@ -687,9 +776,9 @@ class App(ctk.CTk):
         ).pack(pady=(20, 10))
 
         body = (
-            "本功能會協助你批次整理 Facebook / Threads 貼文下的留言，\n"
+            "本功能會協助你批次整理 Facebook 貼文下的留言，\n"
             "並協助你（或你的粉絲）分批發送澄清回覆。\n\n"
-            "Facebook / Threads 服務條款禁止自動化行為，使用本工具有\n"
+            "Facebook 服務條款禁止自動化行為，使用本工具有\n"
             "帳號風險，可能遭遇：發言受限、臨時停權、永久停權。\n\n"
             "✓ 我已了解上述風險\n"
             "✓ 我同意承擔帳號可能被停權的後果\n"
@@ -1066,6 +1155,9 @@ class App(ctk.CTk):
 
         # 貼上：用 Tk 原生剪貼簿的統一綁定（不依賴 pbpaste/pyperclip）
         bind_paste(self.entry_url)
+        bind_select_all(self.entry_url)
+        bind_copy(self.entry_url)
+        bind_cut(self.entry_url)
 
         # 右鍵菜單作為備選
         self._create_context_menu(self.entry_url)
@@ -1245,6 +1337,10 @@ class App(ctk.CTk):
         )
         self.rules_search_entry.pack(side="right", padx=(10, 0))
         self.rules_search_entry.bind("<KeyRelease>", self._on_rules_search_change)
+        bind_paste(self.rules_search_entry)
+        bind_select_all(self.rules_search_entry)
+        bind_copy(self.rules_search_entry)
+        bind_cut(self.rules_search_entry)
 
         # 分頁列先用 side="bottom" 卡住底部，確保任何每頁筆數（10/20/50）下都不會
         # 被規則列表擠出可視範圍；規則列表再用 expand 填滿中間剩餘空間，超出的列
@@ -1423,7 +1519,7 @@ class App(ctk.CTk):
         self.refresh_history_list()
 
     # ------------------------------------------------------------------
-    # 分頁 4（隱藏）：社群闢謠工具（Facebook / Threads）
+    # 分頁 4（隱藏）：社群闢謠工具（Facebook）
     # ------------------------------------------------------------------
     def init_social_tab(self, tab):
         header = ctk.CTkFrame(tab, fg_color="transparent")
@@ -1431,11 +1527,11 @@ class App(ctk.CTk):
         ctk.CTkLabel(header, text="社群闢謠工具", font=FONT_SECTION).pack(side="left")
         info_icon(
             header,
-            "貼上 Facebook 或 Threads 貼文網址，掃描該貼文下的全部留言。\n"
+            "貼上 Facebook 貼文網址，掃描該貼文下的全部留言。\n"
             "命中防禦規則關鍵字的留言會以紅字標示，並自動預填建議回覆\n"
             "（可編輯）；未命中的留言維持一般顏色，你也可以自行填寫回覆。\n\n"
-            "掃描需要你已經在工具專用的 Chrome 視窗登入 Facebook/Threads\n"
-            "帳號（跟啟動直播監控時開的是同一個瀏覽器視窗）。",
+            "首次掃描會自動開啟工具專用的 Chrome 視窗，請在該視窗登入\n"
+            "你的 Facebook 帳號，之後登入狀態會永久保存。",
             side="left", padx=(10, 0)
         )
 
@@ -1443,10 +1539,13 @@ class App(ctk.CTk):
         url_row.pack(fill="x", padx=8, pady=(4, 8))
         self.social_url_entry = ctk.CTkEntry(
             url_row, height=42, font=FONT_ENTRY,
-            placeholder_text="貼上 Facebook 或 Threads 貼文網址"
+            placeholder_text="貼上 Facebook 貼文網址"
         )
         self.social_url_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
         bind_paste(self.social_url_entry)
+        bind_select_all(self.social_url_entry)
+        bind_copy(self.social_url_entry)
+        bind_cut(self.social_url_entry)
         self._create_context_menu(self.social_url_entry)
 
         self.social_scan_btn = ctk.CTkButton(
@@ -1459,6 +1558,17 @@ class App(ctk.CTk):
             tab, text="尚未掃描", font=FONT_LABEL, text_color="#888"
         )
         self.social_status_label.pack(anchor="w", padx=8, pady=(0, 6))
+
+        select_row = ctk.CTkFrame(tab, fg_color="transparent")
+        select_row.pack(fill="x", padx=8, pady=(0, 4))
+        ctk.CTkButton(
+            select_row, text="全選", command=lambda: self._set_all_social_rows(True), font=FONT_BUTTON,
+            fg_color="#444", hover_color="#555", height=32, width=90
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            select_row, text="取消全選", command=lambda: self._set_all_social_rows(False), font=FONT_BUTTON,
+            fg_color="#444", hover_color="#555", height=32, width=90
+        ).pack(side="left")
 
         self.social_list_scroll = ctk.CTkScrollableFrame(
             tab, fg_color="#0f1515",
@@ -1479,12 +1589,12 @@ class App(ctk.CTk):
         """背景執行緒掃描留言，避免卡住 UI（Playwright 操作可能要花數秒~數十秒）"""
         url = self.social_url_entry.get().strip()
         if not url:
-            messagebox.showerror("錯誤", "請先輸入 Facebook 或 Threads 貼文網址")
+            messagebox.showerror("錯誤", "請先輸入 Facebook 貼文網址")
             return
 
         import social_engine
         if not social_engine.detect_platform(url):
-            messagebox.showerror("錯誤", "無法辨識網址平台，僅支援 Facebook 或 Threads 貼文網址")
+            messagebox.showerror("錯誤", "無法辨識網址平台，僅支援 Facebook 貼文網址")
             return
 
         self.social_scan_btn.configure(text="掃描中...", state="disabled")
@@ -1523,10 +1633,15 @@ class App(ctk.CTk):
     def _on_social_scan_done(self, comments):
         self.social_scan_btn.configure(text="掃描留言", state="normal")
         if not comments:
-            self.social_status_label.configure(text="沒有掃描到留言，或掃描失敗")
+            self.social_status_label.configure(
+                text="沒有掃描到留言，或掃描失敗（請確認工具專用 Chrome 已開啟並登入）"
+            )
             return
 
         self.social_status_label.configure(text=f"共 {len(comments)} 則留言（紅字為命中關鍵字）")
+        # 掃描成功後把工具用的 Chrome 視窗帶到最前面，方便直接手動操作
+        # 回覆（目前送出功能未完成，需要使用者在這個視窗手動點回覆按鈕）
+        bring_chat_browser_to_front()
 
         for idx, c in enumerate(comments):
             matched, suggested_reply = self._match_rule_for_comment(c["content"])
@@ -1559,6 +1674,9 @@ class App(ctk.CTk):
             if suggested_reply:
                 reply_entry.insert(0, suggested_reply)
             bind_paste(reply_entry)
+            bind_select_all(reply_entry)
+            bind_copy(reply_entry)
+            bind_cut(reply_entry)
             self._create_context_menu(reply_entry)
 
             self._social_comment_rows.append({
@@ -1571,11 +1689,16 @@ class App(ctk.CTk):
 
         self.social_submit_btn.configure(state="normal")
 
+    def _set_all_social_rows(self, checked: bool):
+        """全選/取消全選：把清單中每一列的送出勾選框設成同一個狀態"""
+        for r in self._social_comment_rows:
+            r["send_var"].set(checked)
+
     def _submit_social_replies(self):
-        """逐列跑髒話檢查，通過才視為可送出。目前只做到『確認清單』這一步，
-        實際批次發送（19分鐘/批的本機排程佇列）尚未實作——需要先用登入
-        帳號實測 Facebook/Threads 的回覆按鈕與輸入框結構才能安全串接，
-        避免用猜測的 selector 在正式環境靜默失敗。"""
+        """逐列跑髒話檢查，通過才送出到 Facebook。
+
+        目前是『確認後立刻依序送出』，還沒有19分鐘/批的排程佇列——
+        那是下一階段要做的，這裡先讓核心送出邏輯能跑、能驗證。"""
         to_send = [r for r in self._social_comment_rows if r["send_var"].get()]
         if not to_send:
             messagebox.showwarning("提示", "沒有勾選任何要送出的回覆")
@@ -1601,12 +1724,43 @@ class App(ctk.CTk):
             messagebox.showwarning("提示", "沒有可送出的回覆內容")
             return
 
-        messagebox.showinfo(
-            "確認清單已通過檢查",
-            f"共 {len(valid_rows)} 筆回覆通過髒話檢查，待送出。\n\n"
-            "本機排程佇列（每批5則、間隔19分鐘自動發送）尚在開發中，\n"
-            "會在下一階段完成後串接這份清單。"
-        )
+        url = self.social_url_entry.get().strip()
+        if not messagebox.askyesno(
+            "確認送出",
+            f"即將對 {len(valid_rows)} 則留言送出回覆。\n\n"
+            "這是真實送出到 Facebook，無法收回，確定要送出嗎？"
+        ):
+            return
+
+        self.social_submit_btn.configure(text="送出中...", state="disabled")
+
+        def send_worker():
+            import social_engine
+            reply_jobs = [{"content": r["content"], "reply_text": text, "author": r["author"]}
+                          for r, text in valid_rows]
+
+            def ui_log(msg_type, data):
+                self.after(0, lambda: self.social_status_label.configure(text=str(data)))
+
+            results = social_engine.send_replies(url, reply_jobs, ui_log)
+            self.after(0, lambda: self._on_social_send_done(results))
+
+        threading.Thread(target=send_worker, daemon=True).start()
+
+    def _on_social_send_done(self, results):
+        self.social_submit_btn.configure(text="確認並送出待發清單", state="normal")
+        success_count = sum(1 for r in results if r["success"])
+        fail_count = len(results) - success_count
+        msg = f"送出完成：成功 {success_count} 則"
+        if fail_count:
+            fail_details = "\n".join(
+                f"- {r['content'][:20]}...：{r['error']}" for r in results if not r["success"]
+            )
+            msg += f"，失敗 {fail_count} 則\n\n{fail_details}"
+            messagebox.showwarning("部分送出失敗", msg)
+        else:
+            messagebox.showinfo("送出完成", msg)
+        self.social_status_label.configure(text=msg.split("\n")[0])
 
     def _history_change_page_size(self, size):
         self._history_page_size = size
@@ -1771,6 +1925,9 @@ class App(ctk.CTk):
         search_entry = ctk.CTkEntry(search_row, height=42, font=FONT_ENTRY, placeholder_text="搜尋留言內容或留言者...")
         search_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
         bind_paste(search_entry)
+        bind_select_all(search_entry)
+        bind_copy(search_entry)
+        bind_cut(search_entry)
 
         search_state = {"matches": [], "current": -1}
 
@@ -1967,6 +2124,9 @@ class App(ctk.CTk):
         entry_keywords = ctk.CTkEntry(dlg, height=42, font=FONT_ENTRY, placeholder_text="例: 檳榔,哭文哲")
         entry_keywords.pack(padx=14, pady=4, fill="x")
         bind_paste(entry_keywords)
+        bind_select_all(entry_keywords)
+        bind_copy(entry_keywords)
+        bind_cut(entry_keywords)
         self._create_context_menu(entry_keywords)
 
         def update_keywords_state():
@@ -1997,6 +2157,9 @@ class App(ctk.CTk):
         text_replies.insert("1.0", initial_replies)
         style_scrollbar(text_replies)
         bind_paste(text_replies)
+        bind_select_all(text_replies)
+        bind_copy(text_replies)
+        bind_cut(text_replies)
         self._create_context_menu(text_replies)
 
         # === 分享到雲端社群資料庫（預設不勾，隱私考量：一定要使用者主動選才分享） ===
