@@ -70,6 +70,9 @@ class ConfigManager:
         # 按下按鈕當下（bot_engine._try_ban 嘗試操作，選單沒有封鎖選項
         # 就代表沒權限，直接回報失敗，不會誤導使用者）。
         self.moderator_mode: bool = False
+        # 送出冷卻秒數（15~60，使用者可在直播監控頁用滑桿調整）。
+        # 預設 15 秒是下限值，避免使用者不小心設太短造成洗版風險。
+        self.reply_cooldown_seconds: int = 15
         self.last_share_date = None  # 每日分享批次上次成功嘗試的日期字串 "YYYY-MM-DD"，None 代表從未執行過
         self.seen_ad_ids = self._load_seen_ads()
         self.synced_config_version = None  # 本機目前已套用的直播設定 version，None=從未成功下載過
@@ -242,6 +245,10 @@ class ConfigManager:
                     self.auto_send_enabled = d.get("auto_send_enabled", False)
                     self.moderator_mode = d.get("moderator_mode", False)
                     self.last_share_date = d.get("last_share_date")
+                    # 舊設定檔沒有這個欄位時預設 15 秒；夾在 15~60 範圍內，
+                    # 避免手動改壞 json 檔或未來調整下限/上限後留下超界的舊值。
+                    cooldown = d.get("reply_cooldown_seconds", 15)
+                    self.reply_cooldown_seconds = max(15, min(60, int(cooldown)))
             except Exception:
                 self.user_rules = []
         else:
@@ -299,6 +306,7 @@ class ConfigManager:
                     "rules": [asdict(r) for r in self.user_rules],
                     "auto_send_enabled": self.auto_send_enabled,
                     "moderator_mode": self.moderator_mode,
+                    "reply_cooldown_seconds": self.reply_cooldown_seconds,
                     "last_share_date": self.last_share_date,
                 },
                 f,
@@ -309,6 +317,11 @@ class ConfigManager:
     def set_auto_send_enabled(self, enabled: bool):
         """開關全自動送出模式，並持久化到本機設定檔"""
         self.auto_send_enabled = enabled
+
+    def set_reply_cooldown_seconds(self, seconds: int):
+        """調整送出冷卻秒數（15~60，超界自動夾住），並持久化到本機設定檔"""
+        self.reply_cooldown_seconds = max(15, min(60, int(seconds)))
+        self.save()
 
     def set_moderator_mode(self, enabled: bool):
         """開關頻道主/版主模式（決定側翼攻擊彈窗是否顯示封鎖按鈕），持久化"""

@@ -22,9 +22,11 @@ APP_DATA_DIR = Path.home() / ".tppchat"
 LOGS_DIR = str(APP_DATA_DIR / "logs")
 BROWSER_PROFILE_DIR = str(APP_DATA_DIR / "browser_profile")
 
-# 送出冷卻秒數：不管是手動點擊送出還是全自動送出模式，兩次實際送出
-# 之間至少要間隔這麼多秒，嚴禁被拿來洗版聊天室。
-SEND_COOLDOWN_SECONDS = 10
+# 送出冷卻秒數的預設值（僅在 config_manager 沒有 reply_cooldown_seconds
+# 屬性時當保底）。實際冷卻秒數改由 config_manager.reply_cooldown_seconds
+# 即時讀取，讓使用者在直播監控頁用滑桿調整（15~60 秒）後立刻生效，
+# 不需要重啟監控。
+SEND_COOLDOWN_SECONDS = 15
 
 
 def extract_video_id(video_url: str) -> str:
@@ -181,13 +183,17 @@ class YouTubeLiveTacticalBot:
             return False, f"禁言操作失敗：{e}"
 
     def get_cooldown_remaining(self) -> float:
-        """回傳距離下次可以送出還要等幾秒，0表示現在就可以送。"""
+        """回傳距離下次可以送出還要等幾秒，0表示現在就可以送。
+        冷卻秒數即時讀取 config.reply_cooldown_seconds（使用者在直播
+        監控頁用滑桿調整後立刻生效，不用重啟監控）；config 上沒有這個
+        屬性（理論上不會發生，防呆用）才退回模組預設值。"""
+        cooldown = getattr(self.config, "reply_cooldown_seconds", SEND_COOLDOWN_SECONDS)
         elapsed = time.time() - self.last_send_time
-        return max(0.0, SEND_COOLDOWN_SECONDS - elapsed)
+        return max(0.0, cooldown - elapsed)
 
     def _try_send(self, text: str) -> bool:
         """統一送出閘門：不管是使用者手動點擊還是全自動送出模式，
-        兩次實際送出中間都必須間隔 SEND_COOLDOWN_SECONDS 秒，
+        兩次實際送出中間都必須間隔 config.reply_cooldown_seconds 秒，
         嚴禁被拿來洗版聊天室。回傳True代表真的送出了，False代表被冷卻擋下。"""
         if self.get_cooldown_remaining() > 0:
             return False
@@ -537,9 +543,10 @@ class YouTubeLiveTacticalBot:
                         while not self.send_queue.empty():
                             queued_text = self.send_queue.get()
                             if not self._try_send(queued_text):
+                                cd = getattr(self.config, "reply_cooldown_seconds", SEND_COOLDOWN_SECONDS)
                                 self.ui_callback(
                                     "SYSTEM",
-                                    f"送出被冷卻機制擋下（{SEND_COOLDOWN_SECONDS}秒內僅能送出一次，"
+                                    f"送出被冷卻機制擋下（{cd}秒內僅能送出一次，"
                                     f"避免洗版），已跳過：{queued_text[:30]}"
                                 )
 

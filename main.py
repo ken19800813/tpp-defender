@@ -403,7 +403,8 @@ class Marquee(ctk.CTkFrame):
 class NotificationPopUp(ctk.CTkToplevel):
     """置頂警示小彈窗：顯示系統建議的回覆，但文字是可編輯的——使用者可以先修改
     內容再送出。送出前會即時檢查是否包含髒話/禁用詞，違規時整個擋下、無法送出。
-    每個小窗只能送出一次；送出還受全域10秒冷卻限制，倒數期間按鈕會顯示秒數、
+    每個小窗只能送出一次；送出還受全域冷卻限制（15~60秒，可在直播監控頁
+    調整），倒數期間按鈕會顯示秒數、
     無法點擊，嚴禁被拿來洗版聊天室。點擊送出後，會自動打字進聊天室並直接送出
     （這一步會真的公開發言）。"""
     # 同時開著的彈窗實例清單，用來計算層疊位移，避免短時間內連續彈出
@@ -1181,6 +1182,8 @@ class App(ctk.CTk):
         )
         self.btn_stop.pack(side="left", padx=4)
 
+        # 三個控制項（全自動送出／頻道主模式／冷卻時間）排成同一橫排，
+        # 省下的垂直空間留給下方聊天室日誌區，讓它可以顯示更多行。
         row3 = ctk.CTkFrame(frame_url, fg_color="transparent")
         row3.pack(fill="x", pady=(10, 0))
 
@@ -1199,22 +1202,20 @@ class App(ctk.CTk):
             "回覆內容會自動加上「@留言者」明確指名對象。\n"
             "關閉（預設）時維持原本流程：彈窗顯示、你確認或編輯後手動按送出。\n\n"
             "不管開關與否、不管同時有多少留言或多少條規則命中，\n"
-            "送出動作都受同一個10秒冷卻機制限制，不能拿來洗版聊天室。",
-            side="left", padx=(10, 0)
+            "送出動作都受同一個冷卻機制限制（15~60秒，可在右側調整），\n"
+            "不能拿來洗版聊天室。",
+            side="left", padx=(6, 0)
         )
-
-        row4 = ctk.CTkFrame(frame_url, fg_color="transparent")
-        row4.pack(fill="x", pady=(6, 0))
 
         self.moderator_mode_var = ctk.BooleanVar(value=self.config_mgr.moderator_mode)
         self.moderator_mode_switch = ctk.CTkSwitch(
-            row4, text="頻道主／版主模式", font=FONT_LABEL_BOLD,
+            row3, text="頻道主／版主模式", font=FONT_LABEL_BOLD,
             variable=self.moderator_mode_var, command=self.on_toggle_moderator_mode,
             progress_color=DANGER, button_color="#eee", button_hover_color="#fff"
         )
-        self.moderator_mode_switch.pack(side="left")
+        self.moderator_mode_switch.pack(side="left", padx=(24, 0))
         info_icon(
-            row4,
+            row3,
             "開啟後，側翼攻擊彈窗會多一個「🚫禁言此人」按鈕（可選時長），\n"
             "方便你直播當下直接處理攻擊留言者。點下去會先跳出確認視窗，\n"
             "避免手滑誤按。\n\n"
@@ -1226,7 +1227,36 @@ class App(ctk.CTk):
             "跟YouTube官方選單完全一致（10秒/1分鐘/5分鐘/10分鐘/30分鐘/\n"
             "24小時），時間到會自動恢復，不需要你再手動解除。這是YouTube\n"
             "帳號層級的操作，不是本工具自己的黑名單。",
-            side="left", padx=(10, 0)
+            side="left", padx=(6, 0)
+        )
+
+        ctk.CTkLabel(
+            row3, text="送出冷卻時間：", font=FONT_LABEL_BOLD
+        ).pack(side="left", padx=(24, 0))
+
+        self.cooldown_slider = ctk.CTkSlider(
+            row3, from_=15, to=60, number_of_steps=45,
+            command=self._on_cooldown_slider_drag,
+            progress_color=ACCENT, button_color="#eee", button_hover_color="#fff",
+            width=160
+        )
+        self.cooldown_slider.set(self.config_mgr.reply_cooldown_seconds)
+        self.cooldown_slider.pack(side="left", padx=(8, 8))
+        self.cooldown_slider.bind("<ButtonRelease-1>", self._on_cooldown_slider_release)
+
+        self.cooldown_value_label = ctk.CTkLabel(
+            row3, text=f"{self.config_mgr.reply_cooldown_seconds} 秒",
+            font=FONT_LABEL_BOLD, text_color=ACCENT, width=48
+        )
+        self.cooldown_value_label.pack(side="left")
+
+        info_icon(
+            row3,
+            "控制系統自動送出回覆的最短間隔（15～60 秒），不管是手動\n"
+            "點擊送出還是全自動送出模式，兩次實際送出中間都必須間隔\n"
+            "這麼久，避免帳號被拿來洗版聊天室。拖曳滑桿調整，放開滑鼠\n"
+            "後立即生效並記住這次的設定，下次啟動也會沿用。",
+            side="left", padx=(6, 0)
         )
 
         # 日誌顯示區
@@ -1284,6 +1314,21 @@ class App(ctk.CTk):
             "（實際能否禁言成功仍取決於你的YouTube帳號是否真的有本頻道權限）。"
             if enabled else "頻道主／版主模式已關閉：側翼攻擊彈窗不再顯示禁言按鈕。"
         )
+
+    def _on_cooldown_slider_drag(self, value):
+        """拖動中即時更新畫面上的秒數顯示，不寫入設定檔（放開滑鼠才存檔，
+        見 _on_cooldown_slider_release），避免拖動過程中頻繁磁碟寫入。"""
+        seconds = int(round(value))
+        self.cooldown_value_label.configure(text=f"{seconds} 秒")
+
+    def _on_cooldown_slider_release(self, event=None):
+        """放開滑鼠才真正持久化：寫入設定檔，並讓正在監控中的 bot 立刻套用
+        新的冷卻秒數（bot_engine 每次都即時讀取 config.reply_cooldown_seconds，
+        不需要重啟監控）。"""
+        seconds = int(round(self.cooldown_slider.get()))
+        self.cooldown_value_label.configure(text=f"{seconds} 秒")
+        self.config_mgr.set_reply_cooldown_seconds(seconds)
+        self.append_log_system(f"送出冷卻時間已設定為 {seconds} 秒。")
 
     # ------------------------------------------------------------------
     # 分頁 2：防禦規則設定
