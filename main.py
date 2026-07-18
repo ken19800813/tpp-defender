@@ -156,29 +156,29 @@ def read_clipboard(widget):
 
 
 def bind_paste(entry):
-    """接管 Ctrl+V / Cmd+V 貼上，綁在輸入框本身（於 class 綁定前執行並
-    return 'break'，避免與系統原生貼上重複觸發）。同時綁大小寫與 <<Paste>>
-    虛擬事件，涵蓋 Mac/Windows/Linux 各種鍵位。"""
+    """接管 Ctrl+V / Cmd+V 貼上。CTkEntry 是複合元件，快捷鍵必須綁在
+    內層的 ._entry 上；tk.Entry/tk.Text 則直接綁。"""
     def do_paste(event=None):
         text = read_clipboard(entry)
         if not text:
-            # 我們讀不到 → 不要 return 'break'，放行讓系統原生貼上當最後一道
             return None
         try:
-            entry.delete("sel.first", "sel.last")  # 有選取就取代
+            entry.delete("sel.first", "sel.last")
         except Exception:
             pass
         try:
-            entry.insert("insert", text)  # 插在游標處（標準貼上行為）
+            entry.insert("insert", text)
         except Exception:
             try:
                 entry.insert(0, text)
             except Exception:
                 pass
-        return "break"  # 已貼上，擋掉原生貼上避免重複
+        return "break"
 
+    # 嘗試綁到內層 ._entry（CTkEntry 的情況），失敗則直接綁（tk.Entry/tk.Text）
+    target = getattr(entry, '_entry', entry)
     for seq in ("<Control-v>", "<Control-V>", "<Command-v>", "<Command-V>", "<<Paste>>"):
-        entry.bind(seq, do_paste)
+        target.bind(seq, do_paste)
     return entry
 
 
@@ -195,9 +195,8 @@ def _get_selection_text(widget):
 
 
 def bind_copy(entry):
-    """接管 Ctrl+C / Cmd+C 複製，綁在輸入框本身——同一批 CTk 複合元件
-    讓選單的 <<Copy>> 虛擬事件轉發不可靠的問題（見 bind_select_all
-    註解），複製也一併補上直接綁定。"""
+    """接管 Ctrl+C / Cmd+C 複製。CTkEntry 是複合元件，快捷鍵必須綁在
+    內層的 ._entry 上；tk.Entry/tk.Text 則直接綁。"""
     def do_copy(event=None):
         text = _get_selection_text(entry)
         if text:
@@ -207,13 +206,15 @@ def bind_copy(entry):
                 pass
         return "break"
 
+    target = getattr(entry, '_entry', entry)
     for seq in ("<Control-c>", "<Control-C>", "<Command-c>", "<Command-C>", "<<Copy>>"):
-        entry.bind(seq, do_copy)
+        target.bind(seq, do_copy)
     return entry
 
 
 def bind_cut(entry):
-    """接管 Ctrl+X / Cmd+X 剪下，綁在輸入框本身，理由同 bind_copy。"""
+    """接管 Ctrl+X / Cmd+X 剪下。CTkEntry 是複合元件，快捷鍵必須綁在
+    內層的 ._entry 上；tk.Entry/tk.Text 則直接綁。"""
     def do_cut(event=None):
         text = _get_selection_text(entry)
         if text:
@@ -227,23 +228,18 @@ def bind_cut(entry):
                 pass
         return "break"
 
+    target = getattr(entry, '_entry', entry)
     for seq in ("<Control-x>", "<Control-X>", "<Command-x>", "<Command-X>", "<<Cut>>"):
-        entry.bind(seq, do_cut)
+        target.bind(seq, do_cut)
     return entry
 
 
 def bind_select_all(entry):
-    """接管 Ctrl+A / Cmd+A 全選，綁在輸入框本身——理由跟 bind_paste 一樣：
-    全選先前只靠選單列的 <<SelectAll>> 虛擬事件轉發給目前焦點元件
-    （見 _setup_menu 註解），但 CTkEntry/CTkTextbox 都是複合元件（外層
-    frame 包一個真正的內部 tk 元件），event_generate 在外層元件上發的
-    虛擬事件不會自動傳進內部子元件，導致選單那條路不可靠。
+    """接管 Ctrl+A / Cmd+A 全選。CTkEntry 是複合元件，快捷鍵必須綁在
+    內層的 ._entry 上；tk.Entry/tk.Text 則直接綁。
 
-    單行（CTkEntry/tk.Entry）跟多行（CTkTextbox/tk.Text）的全選 API不同：
-    Entry 用 select_range(0,"end")+icursor("end")；Text 用
-    tag_add("sel","1.0","end")+mark_set("insert","end")。兩種都試，
-    哪種可用就用哪種，讓這個函式同時相容單行輸入框跟多行文字框
-    （例如側翼攻擊回覆彈窗的 CTkTextbox）。"""
+    Entry 跟 Text 的全選 API 不同：Entry 用 select_range；Text 用 tag_add。
+    兩種都試，相容 CTkEntry/CTkTextbox 等複合元件。"""
     def do_select_all(event=None):
         try:
             entry.select_range(0, "end")
@@ -258,8 +254,9 @@ def bind_select_all(entry):
             pass
         return "break"
 
+    target = getattr(entry, '_entry', entry)
     for seq in ("<Control-a>", "<Control-A>", "<Command-a>", "<Command-A>", "<<SelectAll>>"):
-        entry.bind(seq, do_select_all)
+        target.bind(seq, do_select_all)
     return entry
 
 
