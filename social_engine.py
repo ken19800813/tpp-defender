@@ -1598,14 +1598,22 @@ def send_replies(url: str, reply_jobs: list, ui_callback, per_reply_delay=(1.5, 
 
                 textbox.click()
                 page.wait_for_timeout(150)
-                # 改用 insertText 一次性塞入整段文字（模擬「貼上」），取代逐字
-                # type()。FB 留言框是即時攔截鍵盤事件做提及/表情符號建議的
-                # 編輯器，逐字送很容易被它自己的處理邏輯打亂、字元錯位或
-                # 順序錯亂（實測發生：送出「回覆他們的話...」卻變成亂碼
-                # 「諛リー」）。insertText 觸發的是 input 事件而非逐鍵事件，
-                # 現代 React/contenteditable 編輯器對這種方式的相容性更好。
-                page.keyboard.insert_text(reply_text)
-                page.wait_for_timeout(500)
+                # 用 JavaScript 直接設置 contenteditable 的文本內容 + 觸發事件，
+                # 遠快於 Playwright 的 insert_text()（後者在 FB 的 React 編輯器上有
+                # 延遲）。先前用 insert_text() 是為避免逐字 type() 導致的亂碼，但
+                # JS 直接改 DOM 再觸發事件同樣繞過編輯器的逐鍵攔截、且快得多。
+                js_code = """
+                (text) => {
+                  let el = document.activeElement;
+                  if (el && el.getAttribute('role') === 'textbox') {
+                    el.textContent = text;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                  }
+                }
+                """
+                page.evaluate(js_code, reply_text)
+                page.wait_for_timeout(50)  # 縮短等待
 
                 # 送出前先驗證輸入框內容是否等於預期文字，不等就中止、
                 # 不要在文字錯誤的狀態下仍按 Enter 送出公開留言。
