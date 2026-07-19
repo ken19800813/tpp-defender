@@ -735,6 +735,10 @@ class App(ctk.CTk):
         self._konami_buffer = []
         self._social_tab_unlocked = False
         self.bind_all("<KeyPress>", self._on_konami_keypress)
+        # 快捷鍵攔截（見 _on_global_keypress 註解）另外用 add="+" 疊加，
+        # 不會覆蓋掉上面 Konami Code 的監聽（Tk 的 bind() 預設會直接
+        # 取代同序列的舊 handler，用 add="+" 才是「疊加」而非「取代」）。
+        self.bind_all("<KeyPress>", self._on_global_keypress, add="+")
 
         # 程式關閉時優雅關閉監控執行緒，確保日誌被存檔
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -872,21 +876,24 @@ class App(ctk.CTk):
         widget.bind("<Button-2>", show_menu)  # macOS 部分滑鼠設定的右鍵
         widget.bind("<Control-Button-1>", show_menu)  # macOS 觸控板 Ctrl+點擊
 
-    def _setup_menu(self):
-        """加入菜單欄，提供編輯功能。
+    # macOS 上這個 Cmd 鍵在本機 Tcl/Tk 組建裡實際回報的修飾鍵 state 位元。
+    # 用診斷用的 <KeyPress> 監聽器實測得出（見 _on_global_keypress）：
+    # 按住 Cmd 打字時，event.state=8、keysym 卻是壞掉的 '??'（不是預期的
+    # 'a'），代表這個 Tk 組建把 Cmd 鍵當成 Meta 修飾鍵、且 Meta+字母的
+    # keysym 對應表是空的。這解釋了為什麼不管用 <Command-a> 或
+    # <Meta-a> 這種「keysym 靠 -a 精確比對」的寫法全部綁不到——事件的
+    # keysym 根本不是 'a'。唯一可靠的資訊是 state 裡的這個位元 + 正確的
+    # event.char，所以改成攔截所有 KeyPress、自己判斷 state 位元 + char，
+    # 不依賴 Tk 的 <Command-x> 這種語法糖。
+    _CMD_MODIFIER_BIT = 8
 
-        關鍵：macOS 上一旦用 self.config(menu=menubar) 換掉系統預設選單列，
-        Tk 內建那個會自動把 Cmd+C/V/X/A 轉發給目前焦點元件的隱形 Edit 選單
-        就跟著消失了——macOS 的 Cmd+按鍵快捷鍵是靠選單系統的「按鍵對應」
-        比對生效，選單裡沒有對應項目，系統就直接把按鍵吃掉，連 Tkinter
-        的 widget.bind() 都收不到事件。所以只綁 bind_paste() 在 widget 上
-        沒用，一定要在選單列補回「剪下/複製/貼上/全選」這幾個標準項目，
-        且要對「目前有焦點的元件」動作（不是寫死某個輸入框），才能讓
-        Cmd+V 在任何輸入框都正常運作。"""
+    def _setup_menu(self):
+        """加入菜單欄（僅供滑鼠點擊使用，快捷鍵改由 _on_global_keypress 處理，
+        見該函式註解說明為何 <Command-x> 這類寫法在本機完全綁不到事件）。"""
         menubar = tk.Menu(self, bg="#1c2626", fg="white", relief="flat")
         self.config(menu=menubar)
 
-        edit_menu = tk.Menu(menubar, tearoff=0, bg="#1c2626", fg="white", relief="flat")
+        edit_menu = tk.Menu(menubar, name="edit", tearoff=0, bg="#1c2626", fg="white", relief="flat")
         menubar.add_cascade(label="編輯", menu=edit_menu)
 
         def _focused_widget():
@@ -911,6 +918,45 @@ class App(ctk.CTk):
         edit_menu.add_command(label="全選", command=_gen("<<SelectAll>>"), accelerator="Cmd+A")
         edit_menu.add_separator()
         edit_menu.add_command(label="貼上網址到「直播網址」欄位", command=self._paste_url)
+
+        # 快捷鍵真正的攔截點：見 _on_global_keypress。這裡只補一個保險，
+        # Windows/Linux 上 Ctrl+X/C/V/A 走標準 <Control-x> 語法通常沒問題
+        # （問題只在這台機器的 macOS Tk 組建），為了不影響其他平台的正常
+        # 路徑，這幾行原生綁定繼續保留、跟 _on_global_keypress 並存也
+        # 不會重複觸發（widget 自己的 bind_paste() 等收到後會 "break"）。
+        for seq in ("<Control-x>", "<Control-X>"):
+            self.bind_all(seq, lambda e: (_gen("<<Cut>>")(), "break")[1])
+        for seq in ("<Control-c>", "<Control-C>"):
+            self.bind_all(seq, lambda e: (_gen("<<Copy>>")(), "break")[1])
+        for seq in ("<Control-v>", "<Control-V>"):
+            self.bind_all(seq, lambda e: (_gen("<<Paste>>")(), "break")[1])
+        for seq in ("<Control-a>", "<Control-A>"):
+            self.bind_all(seq, lambda e: (_gen("<<SelectAll>>")(), "break")[1])
+
+    def _on_global_keypress(self, event):
+        """全域按鍵攔截：這台機器的 macOS Tk 組建，Cmd 鍵底下字母鍵的
+        keysym 是壞掉的（實測回報 '??'），標準的 <Command-a> 這種靠
+        keysym 精確比對的 bind 語法完全綁不到事件（試過 <Command-a>、
+        <Meta-a>、選單 accelerator、name="edit" 保留選單全部無效，
+        用 <KeyPress> 印出 event.state/event.char 才挖出真相）。
+        唯一可靠的資訊是 event.state 裡代表 Cmd 鍵的第 8 位元、加上
+        正確的 event.char，所以自己判斷、不依賴 Tk 的 keysym 綁定語法。"""
+        if not (event.state & self._CMD_MODIFIER_BIT):
+            return None
+        ch = (event.char or "").lower()
+        virtual_event = {
+            "v": "<<Paste>>", "c": "<<Copy>>",
+            "x": "<<Cut>>", "a": "<<SelectAll>>",
+        }.get(ch)
+        if virtual_event is None:
+            return None
+        w = self.focus_get()
+        if w is not None:
+            try:
+                w.event_generate(virtual_event)
+            except Exception:
+                pass
+        return "break"
 
     def _paste_url(self):
         """從剪貼簿貼上網址到「直播網址」輸入框（選單用）"""
