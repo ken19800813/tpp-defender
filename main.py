@@ -722,6 +722,11 @@ class App(ctk.CTk):
         self._history_page_size = 6
 
         self.config_mgr = ConfigManager()
+        self.withdraw()  # 序號驗證通過前先隱藏主視窗，避免看到一閃而過的空白畫面
+        if not self._ensure_license_activated():
+            self.destroy()
+            return
+        self.deiconify()
         self.bot_manager = BotThreadManager(self.config_mgr, self.handle_bot_signal)
         self._setup_ttk_styles()
         self._setup_menu()
@@ -742,6 +747,88 @@ class App(ctk.CTk):
 
         # 程式關閉時優雅關閉監控執行緒，確保日誌被存檔
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def _ensure_license_activated(self) -> bool:
+        """啟動時的序號驗證關卡。config.json 裡 license_activated=True
+        代表先前已經成功驗證過一次，直接放行不再問。否則跳出阻斷式
+        對話框要求輸入 Email+序號，呼叫後端 /api/fuckdpp/license/verify
+        （見 config.py 的 verify_license()）。使用者關閉對話框或驗證
+        失敗達到放棄程度時回傳 False，呼叫端會直接關閉整個 App，不會
+        讓未授權的人繞過這關進到主畫面。
+
+        網路請求丟到背景執行緒跑，避免 UI 卡住；用 wait_window() 讓
+        __init__ 停在這裡等對話框結束，同時 Tk 事件迴圈仍會運作，
+        所以背景執行緒回報結果用的 self.after() 輪詢照樣有效。"""
+        if self.config_mgr.license_activated:
+            return True
+
+        result = {"activated": False}
+
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("序號啟用")
+        dlg.geometry("420x260")
+        dlg.resizable(False, False)
+        dlg.protocol("WM_DELETE_WINDOW", lambda: dlg.destroy())
+        dlg.attributes("-topmost", True)
+
+        ctk.CTkLabel(
+            dlg, text="🛡️ FuckDPP 直播小幫手 - 序號啟用",
+            font=("PingFang TC", 16, "bold"),
+        ).pack(pady=(20, 4))
+        ctk.CTkLabel(
+            dlg, text="尚未申請序號請至 line-news-0p7m.onrender.com/fuckdpp 申請",
+            font=("PingFang TC", 11), text_color="#9fb3b3",
+        ).pack(pady=(0, 14))
+
+        entry_email = ctk.CTkEntry(dlg, placeholder_text="Email", width=320)
+        entry_email.pack(pady=6)
+        entry_serial = ctk.CTkEntry(dlg, placeholder_text="序號 FDPP-XXXX-XXXX-XXXX-XXXX", width=320)
+        entry_serial.pack(pady=6)
+
+        status_label = ctk.CTkLabel(dlg, text="", text_color="#ff9b9b", font=("PingFang TC", 11))
+        status_label.pack(pady=(4, 0))
+
+        btn_submit = ctk.CTkButton(dlg, text="驗證並啟用", width=200)
+        btn_submit.pack(pady=14)
+
+        def do_verify():
+            email = entry_email.get().strip()
+            serial = entry_serial.get().strip()
+            if not email or not serial:
+                status_label.configure(text="請輸入 Email 與序號")
+                return
+            btn_submit.configure(state="disabled", text="驗證中...")
+            status_label.configure(text="", text_color="#9fb3b3")
+
+            result_box = {}
+
+            def worker():
+                ok, err = self.config_mgr.verify_license(email, serial)
+                result_box["ok"] = ok
+                result_box["err"] = err
+
+            t = threading.Thread(target=worker, daemon=True)
+            t.start()
+
+            def poll():
+                if t.is_alive():
+                    dlg.after(150, poll)
+                    return
+                if result_box.get("ok"):
+                    result["activated"] = True
+                    dlg.destroy()
+                else:
+                    btn_submit.configure(state="normal", text="驗證並啟用")
+                    status_label.configure(text=result_box.get("err", "驗證失敗"), text_color="#ff9b9b")
+
+            dlg.after(150, poll)
+
+        btn_submit.configure(command=do_verify)
+        entry_serial.bind("<Return>", lambda e: do_verify())
+
+        dlg.update_idletasks()
+        dlg.wait_window()
+        return result["activated"]
 
     def on_closing(self):
         """優雅關閉應用：停止監控執行緒、等待日誌存檔、再關閉視窗"""

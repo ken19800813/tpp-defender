@@ -33,6 +33,11 @@ SEEN_ADS_FILE = "seen_ads.json"
 # （黑名單/速率限制），本機驗證只是第一道防線。
 LIVESTREAM_SHARE_RULE_API_URL = "https://line-news-0p7m.onrender.com/api/livestream/rules/share"
 
+# 序號啟用：申請走 https://line-news-0p7m.onrender.com/fuckdpp 網頁表單，
+# 人工審核通過後才會回傳 valid=True；只驗證一次，成功後把 email/serial
+# 存進 config.json，之後啟動不再重複打這支 API。
+LICENSE_VERIFY_API_URL = "https://line-news-0p7m.onrender.com/api/fuckdpp/license/verify"
+
 
 @dataclass
 class Rule:
@@ -74,6 +79,7 @@ class ConfigManager:
         # 預設 15 秒是下限值，避免使用者不小心設太短造成洗版風險。
         self.reply_cooldown_seconds: int = 15
         self.last_share_date = None  # 每日分享批次上次成功嘗試的日期字串 "YYYY-MM-DD"，None 代表從未執行過
+        self.license_activated: bool = False  # 序號是否已成功驗證過一次；True 之後啟動不再要求輸入
         self.seen_ad_ids = self._load_seen_ads()
         self.synced_config_version = None  # 本機目前已套用的直播設定 version，None=從未成功下載過
 
@@ -249,6 +255,7 @@ class ConfigManager:
                     # 避免手動改壞 json 檔或未來調整下限/上限後留下超界的舊值。
                     cooldown = d.get("reply_cooldown_seconds", 15)
                     self.reply_cooldown_seconds = max(15, min(60, int(cooldown)))
+                    self.license_activated = bool(d.get("license_activated", False))
             except Exception:
                 self.user_rules = []
         else:
@@ -308,11 +315,39 @@ class ConfigManager:
                     "moderator_mode": self.moderator_mode,
                     "reply_cooldown_seconds": self.reply_cooldown_seconds,
                     "last_share_date": self.last_share_date,
+                    "license_activated": self.license_activated,
                 },
                 f,
                 indent=4,
                 ensure_ascii=False
             )
+
+    def verify_license(self, email: str, serial: str) -> tuple:
+        """呼叫後端驗證序號，成功就把啟用狀態存檔（只需要成功一次，
+        之後開機不再要求輸入）。回傳 (success, error_message)，
+        error_message 只在 success=False 時有值，涵蓋「連線失敗」與
+        「後端明確判定序號無效／尚未審核通過」兩種情況並給不同訊息。"""
+        email = (email or "").strip()
+        serial = (serial or "").strip()
+        if not email or not serial:
+            return False, "請輸入 Email 與序號"
+        try:
+            res = requests.post(
+                LICENSE_VERIFY_API_URL,
+                json={"email": email, "serial": serial},
+                timeout=8,
+            )
+            try:
+                data = res.json()
+            except Exception:
+                return False, "伺服器回應格式異常，請稍後再試"
+            if res.status_code == 200 and data.get("success") and data.get("valid"):
+                self.license_activated = True
+                self.save()
+                return True, ""
+            return False, "序號無效，或申請尚未通過審核，請確認 Email／序號是否正確"
+        except Exception:
+            return False, "無法連線到驗證伺服器，請確認網路連線後再試"
 
     def set_auto_send_enabled(self, enabled: bool):
         """開關全自動送出模式，並持久化到本機設定檔"""
