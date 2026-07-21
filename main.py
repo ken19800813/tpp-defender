@@ -722,11 +722,6 @@ class App(ctk.CTk):
         self._history_page_size = 6
 
         self.config_mgr = ConfigManager()
-        self.withdraw()  # 序號驗證通過前先隱藏主視窗，避免看到一閃而過的空白畫面
-        if not self._ensure_license_activated():
-            self.destroy()
-            return
-        self.deiconify()
         self.bot_manager = BotThreadManager(self.config_mgr, self.handle_bot_signal)
         self._setup_ttk_styles()
         self._setup_menu()

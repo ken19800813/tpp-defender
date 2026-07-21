@@ -357,10 +357,20 @@ class ConfigManager:
                 if attempt < 2:
                     continue
                 return False, "連線逾時，請確認網路連線後再試"
-            except Exception:
+            except Exception as e:
+                # 診斷：把 frozen(打包)環境下真正的例外寫進使用者家目錄的
+                # log，定位「源碼能連、打包後連不上」這種環境差異。
+                try:
+                    import traceback
+                    with open(os.path.join(os.path.expanduser("~"),
+                                           "tppchat_license_error.log"),
+                              "a", encoding="utf-8") as lf:
+                        lf.write(f"=== attempt {attempt} ===\n{traceback.format_exc()}\n")
+                except Exception:
+                    pass
                 if attempt < 2:
                     continue
-                return False, "無法連線到驗證伺服器，請確認網路連線後再試"
+                return False, f"無法連線到驗證伺服器（{type(e).__name__}）"
 
     def set_auto_send_enabled(self, enabled: bool):
         """開關全自動送出模式，並持久化到本機設定檔"""
