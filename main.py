@@ -785,6 +785,24 @@ class App(ctk.CTk):
         entry_serial = ctk.CTkEntry(dlg, placeholder_text="序號 FDPP-XXXX-XXXX-XXXX-XXXX", width=320)
         entry_serial.pack(pady=6)
 
+        # 快捷鍵：對話框內的 Entry 也要支持 Cmd+V/Cmd+A/Cmd+C/Cmd+X
+        import pyperclip
+        def bind_entry_shortcuts(entry):
+            def paste(e):
+                try:
+                    entry.delete("0", "end")
+                    entry.insert("0", pyperclip.paste())
+                except Exception:
+                    pass
+                return "break"
+            def select_all(e):
+                entry.select_range("0", "end")
+                return "break"
+            entry.bind("<Command-v>", paste)
+            entry.bind("<Command-a>", select_all)
+        bind_entry_shortcuts(entry_email)
+        bind_entry_shortcuts(entry_serial)
+
         status_label = ctk.CTkLabel(dlg, text="", text_color="#ff9b9b", font=("PingFang TC", 11))
         status_label.pack(pady=(4, 0))
 

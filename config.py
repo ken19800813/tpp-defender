@@ -326,28 +326,41 @@ class ConfigManager:
         """呼叫後端驗證序號，成功就把啟用狀態存檔（只需要成功一次，
         之後開機不再要求輸入）。回傳 (success, error_message)，
         error_message 只在 success=False 時有值，涵蓋「連線失敗」與
-        「後端明確判定序號無效／尚未審核通過」兩種情況並給不同訊息。"""
+        「後端明確判定序號無效／尚未審核通過」兩種情況並給不同訊息。
+
+        內建重試（最多 3 次）應對 Render 部署期間的暫時性連線問題。"""
         email = (email or "").strip()
         serial = (serial or "").strip()
         if not email or not serial:
             return False, "請輸入 Email 與序號"
-        try:
-            res = requests.post(
-                LICENSE_VERIFY_API_URL,
-                json={"email": email, "serial": serial},
-                timeout=8,
-            )
+
+        for attempt in range(3):
             try:
-                data = res.json()
+                res = requests.post(
+                    LICENSE_VERIFY_API_URL,
+                    json={"email": email, "serial": serial},
+                    timeout=15,  # 加寬 timeout 應對 Render 部署期間的慢回應
+                )
+                try:
+                    data = res.json()
+                except Exception:
+                    if attempt < 2:
+                        continue
+                    return False, "伺服器回應格式異常，請稍後再試"
+                if res.status_code == 200 and data.get("success") and data.get("valid"):
+                    self.license_activated = True
+                    self.save()
+                    return True, ""
+                # 序號無效或未審核不要重試，直接回報
+                return False, "序號無效，或申請尚未通過審核，請確認 Email／序號是否正確"
+            except requests.exceptions.Timeout:
+                if attempt < 2:
+                    continue
+                return False, "連線逾時，請確認網路連線後再試"
             except Exception:
-                return False, "伺服器回應格式異常，請稍後再試"
-            if res.status_code == 200 and data.get("success") and data.get("valid"):
-                self.license_activated = True
-                self.save()
-                return True, ""
-            return False, "序號無效，或申請尚未通過審核，請確認 Email／序號是否正確"
-        except Exception:
-            return False, "無法連線到驗證伺服器，請確認網路連線後再試"
+                if attempt < 2:
+                    continue
+                return False, "無法連線到驗證伺服器，請確認網路連線後再試"
 
     def set_auto_send_enabled(self, enabled: bool):
         """開關全自動送出模式，並持久化到本機設定檔"""
